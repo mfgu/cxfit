@@ -1183,59 +1183,94 @@ def sum_cx(d):
         e[:] += matmul(a*a, d.we*d.we)*(x*x)
     return (c,e)
 
-def sum_tcx(z):
+def sum_tcx(z, k=0):
     c = 0.0
     e = 0.0
+    if k == 0:
+        k = z.ds[0].k
     for d in z.ds:
+        if d.k != k:
+            continue
         ci, ei = sum_cx(d)
         c += ci
         e += ei
     return (c,e)
 
-def sum_icx(z, ic):
-    c,e = sum_tcx(z)
+def sel_icx(z, ic, k = 0):
+    if k == 0:
+        k = z.ds[0].k
+    c,e = sum_tcx(z, k)
+    for d in z.ds:
+        if d.k == k:
+            break
+    n = len(c)
+    a = d.rd.n[n+ic]
+    for i in range(len(c)):
+        if not d.rd.n[i].startswith(a):
+            c[i] = 0.0
+            e[i] = 0.0
+    return (c,sqrt(e))
+    
+def sum_icx(z, k = 0):
+    if k == 0:
+        k = z.ds[0].k
+    c,e = sum_tcx(z, k)    
+    for d in z.ds:
+        if d.k == k:
+            break
+    n = len(c)
+    if len(ic) == 0:
+        ic = d.rd.n[n:]
     nc = len(ic)
     r = zeros(nc)
     rs = zeros(nc)
     for i in range(len(c)):
-        for k in range(nc):
-            if z.ds[0].rd.n[i].startswith(ic[k]):
-                r[k] += c[i]
-                rs[k] += e[i]
+        for j in range(nc):
+            if z.ds[0].rd.n[i].startswith(ic[j]):
+                r[j] += c[i]
+                rs[j] += e[i]
     return (r,sqrt(rs))
 
-def sum_tnk(z):
-    c,e = sum_tcx(z)
-    v = z.ds[0].rd.v[:len(c)]
+def sum_tnk(z, k=0):
+    if k == 0:
+        k = z.ds[0].k
+    c,e = sum_tcx(z, k)
+    for d in z.ds:
+        if d.k == k:
+            break
+    v = d.rd.v[:len(c)]
     vn = v/100
     vk = v%100
     nmax = nanmax(vn)
     r = zeros((nmax,nmax))
     s = zeros((nmax,nmax))
     for n in range(nmax):
-        for k in range(nmax):
-            w = where(logical_and(vn==n+1, vk==k))
-            r[n,k] += sum(c[w])
-            s[n,k] += sum(e[w])
+        for j in range(nmax):
+            w = where(logical_and(vn==n+1, vk==j))
+            r[n,j] += sum(c[w])
+            s[n,j] += sum(e[w])
     return (r,s)
 
-def plot_tnk(z, op=0, nmin=8, nmax=11, kmax=6, pn0=4, pn1=12):
+def plot_tnk(z, op=0, nmin=8, nmax=11, kmax=6, pn0=4, pn1=12, k=0):
     if not op:
         clf()
-    r,s = sum_tnk(z)
+    if k == 0:
+        k = z.ds[0].k
+    cols = ['b','g','r','c','m','y','k']
+    r,s = sum_tnk(z, k)
     tr = sum(r, axis=1)
     ts = sqrt(sum(s, axis=1))
     n = len(r[0])
-    y = [r[i,:]/tr[i] for i in range(n)]
-    ye = [sqrt(s[i,:])/tr[i] for i in range(n)]
+    y = [r[i,:]/max(1e-30,tr[i]) for i in range(n)]
+    ye = [sqrt(s[i,:])/max(1e-30,tr[i]) for i in range(n)]
     xn = arange(n)+1
     xk = arange(n)
     trs = sum(tr)
     pn1 = min(pn1, n+1)
     idx = range(pn0-1,pn1)
-    errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o')
+    errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[0])
     for i in range(nmin, nmax+1):
-        errorbar(xk[:kmax+1], y[i-1][:kmax+1], yerr=ye[i][:kmax+1], capsize=3, marker='o')
+        errorbar(xk[:kmax+1], y[i-1][:kmax+1], yerr=ye[i][:kmax+1], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
     legend(['N-dist', 'L-dist N=8', 'L-dist N=9', 'L-dist N=10', 'L-dist N=11'])
     xlabel('N/L')
     ylabel('Fraction')
