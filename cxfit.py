@@ -1158,7 +1158,8 @@ def plot_ink(z, i, op=0, col=0, xoffset=0, sav=''):
         clf()
     if col < 0:
         col=i
-    errorbar(array(z.ds[i].ns)+0.1+xoffset, z.ds[i].an[:-1], yerr=z.ds[i].ae[:-1], capsize=3, marker='o', color=cols[col%len(cols)])
+    if len(z.ds[i].ns) > 1:
+        errorbar(array(z.ds[i].ns)+0.1+xoffset, z.ds[i].an[:-1], yerr=z.ds[i].ae[:-1], capsize=3, marker='o', color=cols[col%len(cols)])
     errorbar(z.ds[i].xk-0.1+xoffset, z.ds[i].wk, yerr=z.ds[i].we, capsize=3, marker='o', color=cols[col%len(cols)])
     xlabel('N/L')
     ylabel('Fraction')
@@ -1166,9 +1167,11 @@ def plot_ink(z, i, op=0, col=0, xoffset=0, sav=''):
         savefig(sav)
 
 def plot_snk(z, sav=''):
-    plot_ink(z, 0)
+    plot_ink(z, 0)    
     plot_ink(z, 1, op=1, col=-1)
     plot_ink(z, 2, op=1, col=-2, sav=sav)
+    labs = ['H-Like', 'He-Like Singlet', 'He-Like Triplet']
+    legend(labs)
     
 def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0):
     fm = z.sp
