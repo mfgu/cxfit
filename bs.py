@@ -23,8 +23,13 @@ for n in range(n0, n1+1):
         swm = 5
         for m in [101, 103, 701, 703]:
             os.system('python s.py --z=%d --k=%d --swm=%d --md=%d%02d%02d --sdir=%s'%(z, k, swm, m, n, n, sdir))
-            os.system('python pnk.py %d %d %d %d %s'%(z, k, m, n, sdir))  
+            os.system('python pnk.py %d %d %d %d %s'%(z, k, m, n, sdir))
     elif sm == 4:
+        swm = 6
+        for m in [2101,2103,4301,4303,6501,6503,8701,8703,99901,99903]:
+            os.system('python s.py --z=%d --k=%d --swm=%d --md=%d%02d%02d --sdir=%s'%(z, k, swm, m, n, n, sdir))
+            os.system('python pnk.py %d %d %d %d %s'%(z, k, m, n, sdir))
+    elif sm == 5:
         for m in [1, 2]:
             for j in [-3, -1, 1, 3]:
                 jm = abs(j)*100 + m

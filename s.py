@@ -109,7 +109,7 @@ for kk in range(kk0, kk1+1):
     WallTime('pop')
     InitBlocks()
     DumpRates(ps+'a.rm', 0, 0, -1, 1)
-    DumpRates(ps+'a.r1', k, 1, -1, 1)
+    DumpRates(ps0+'a.r1', k, 1, -1, 1)
     DumpRates(ps+'a.r7', k, 7, -1, 1)
     SetIteration(1e-5, 0.5)
     LevelPopulation()

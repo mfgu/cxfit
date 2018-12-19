@@ -90,7 +90,7 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
         ds0 = '%s/%s%02d'%(ddir, a, k)
         fn = ds0 + 'a.en'
         rd = rfac.FLEV(ds0+'a.en')
-        fn = ps0+'%s%02dk00a.r1'%(nc, ws*100+ns[0])
+        fn = ps0+'a.r1'
         r = rcs(fn)
         ir0 = int32(r[1])
         ir1 = int32(r[0])
@@ -282,6 +282,29 @@ def scale_spec(yd0, ye):
     yd[w] = yd[w]*eff[w]
     return (yd, eff)
 
+def mcmc_cmp(z, m):
+    np = len(z.mpa)
+    ni = len(z.ds)
+    nsig = len(z.rs[0].sig)
+    ia = z.ia
+    iw = z.iw
+    iid = z.iid
+    z.mpa[:] = z.hmp[m,:]
+    for ii in range(ni):
+        z.ds[ii].anr[:-1] = z.mpa[ia[ii]:ia[ii+1]]
+        z.ds[ii].anr[-1] = z.mpa[iid[ii]]
+        z.ds[ii].wk[:] = z.mpa[iw[ii]:iw[ii+1]]
+        for jj in range(len(z.ds[ii].ns)):
+            nn = z.ds[ii].ns[jj]
+            if nn <= z.ds[ii].kmax:
+                xw = sum(z.mpa[z.iw[ii]:(z.iw[ii+1]-(z.ds[ii].kmax+1-nn))])
+            else:
+                xw = 1.0
+            z.ds[ii].an[jj] = xw*z.ds[ii].anr[jj]
+        xw = sum(z.ds[ii].an[:-1])
+        z.ds[ii].an[:-1] /= xw
+        z.ds[ii].an[-1] = z.ds[ii].anr[-1]*xw
+    
 def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
     np = len(z.mpa)
     ni = len(z.ds)
@@ -1050,7 +1073,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype, er=[], nmc=5000, fixld=[], fixn
     z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf)
     return z
 
-def plot_ldist(z, op=0):
+def plot_ldist(z, op=0, sav=''):
     ds = z.ds
     if not op:
         clf()
@@ -1075,8 +1098,10 @@ def plot_ldist(z, op=0):
         errorbar(d.xk-(0.2/ni)*(i-ni/2), d.wk, yerr=d.we, marker='o', capsize=3)
     xlabel('L')
     ylabel('Fraction')
+    if sav != '':
+        savefig(sav)
     
-def plot_idist(z, op=0):
+def plot_idist(z, op=0, sav=''):
     if not op:
         clf()
     x0 = arange(len(z.ds))
@@ -1093,8 +1118,10 @@ def plot_idist(z, op=0):
 
     xlabel('Ion')
     ylabel('Fraction')
+    if sav != '':
+        savefig(sav)
     
-def plot_ndist(z, op=0):
+def plot_ndist(z, op=0, sav=''):
     ds = z.ds
     if not op:
         clf()
@@ -1122,9 +1149,11 @@ def plot_ndist(z, op=0):
 
     xlabel('N')
     ylabel('Fraction')
+    if sav != '':
+        savefig(sav)
 
-def plot_ink(z, i, op=0, col=-1, xoffset=0):
-    cols = ['b','g','r','c','m','y','k']
+def plot_ink(z, i, op=0, col=0, xoffset=0, sav=''):
+    cols = ['k', 'b','g','r','c','m','y']
     if not op:
         clf()
     if col < 0:
@@ -1133,12 +1162,21 @@ def plot_ink(z, i, op=0, col=-1, xoffset=0):
     errorbar(z.ds[i].xk-0.1+xoffset, z.ds[i].wk, yerr=z.ds[i].we, capsize=3, marker='o', color=cols[col%len(cols)])
     xlabel('N/L')
     ylabel('Fraction')
+    if sav != '':
+        savefig(sav)
+
+def plot_snk(z, sav=''):
+    plot_ink(z, 0)
+    plot_ink(z, 1, op=1, col=-1)
+    plot_ink(z, 2, op=1, col=-2, sav=sav)
     
-def plot_spec(z, res=0, op=0, ylog=0):
+def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0):
     fm = z.sp
     if not op:
         clf()
     if res == 0:
+        if ymax > 0:
+            ylim(-ymax*0.01, ymax)
         if ylog > 0:
             ymin = max(fm.yd)*ylog
             semilogy(fm.em, ymin+fm.yd)
@@ -1156,7 +1194,9 @@ def plot_spec(z, res=0, op=0, ylog=0):
         plot(fm.em, r)
         ylabel('Residual')
     xlabel('Energy (eV)')
-    
+    if sav != '':
+        savefig(sav)
+        
 def plot_ene(z, i0=0.25, op=0):
     if not op:
         clf()
@@ -1171,7 +1211,7 @@ def plot_param(z, ip, i0=0.25, op=0):
         i0 = int32(i0*z.imp)
     plot(arange(i0, z.imp), z.hmp[i0:z.imp,ip])
 
-def sum_cx(d):
+def sum_cx(d):    
     ni = len(d.ns)
     im = len(d.ad[0,0])
     c = zeros(im)
@@ -1179,8 +1219,10 @@ def sum_cx(d):
     for i in range(ni):
         a = transpose(d.ad[i])
         x = d.anr[-1]*d.anr[i]
-        c[:] += matmul(a,d.wk)*x
+        y = matmul(a, d.wk)
+        c[:] += y*x
         e[:] += matmul(a*a, d.we*d.we)*(x*x)
+        e[:] += y*y*((d.anr[-1]*d.ae[i])**2+((d.ae[-1]*d.anr[i])**2))
     return (c,e)
 
 def sum_tcx(z, k=0):
@@ -1200,6 +1242,7 @@ def sel_icx(z, ic, k = 0):
     if k == 0:
         k = z.ds[0].k
     c,e = sum_tcx(z, k)
+    tc = sum(c)
     for d in z.ds:
         if d.k == k:
             break
@@ -1209,18 +1252,18 @@ def sel_icx(z, ic, k = 0):
         if not d.rd.n[i].startswith(a):
             c[i] = 0.0
             e[i] = 0.0
-    return (c,sqrt(e))
+    return (c/tc,sqrt(e)/tc,tc)
     
 def sum_icx(z, k = 0):
     if k == 0:
         k = z.ds[0].k
-    c,e = sum_tcx(z, k)    
+    c,e = sum_tcx(z, k)
+    tc = sum(c)
     for d in z.ds:
         if d.k == k:
             break
     n = len(c)
-    if len(ic) == 0:
-        ic = d.rd.n[n:]
+    ic = d.rd.n[n:]
     nc = len(ic)
     r = zeros(nc)
     rs = zeros(nc)
@@ -1229,7 +1272,7 @@ def sum_icx(z, k = 0):
             if z.ds[0].rd.n[i].startswith(ic[j]):
                 r[j] += c[i]
                 rs[j] += e[i]
-    return (r,sqrt(rs))
+    return (r/tc,sqrt(rs)/tc,tc)
 
 def sum_tnk(z, k=0):
     if k == 0:
@@ -1251,13 +1294,45 @@ def sum_tnk(z, k=0):
             s[n,j] += sum(e[w])
     return (r,s)
 
-def plot_tnk(z, op=0, nmin=8, nmax=11, kmax=6, pn0=4, pn1=12, k=0):
+def avg_tnk(z, k=0, m=0.25):
+    if k == 0:
+        k = z.ds[0].k
+    for d in z.ds:
+        if d.k == k:
+            break
+    im = len(d.ad[0,0])
+    v = d.rd.v[:im]
+    vn = v/100
+    vk = v%100
+    nmax = nanmax(vn)
+    r = zeros((nmax,nmax))
+    s = zeros((nmax,nmax))
+    if m < 1:
+        m0 = int32(z.imp*m)
+    else:
+        m0 = int32(m)    
+    for i in range(z.imp-m0, z.imp):
+        mcmc_cmp(z, i)
+        c,e = sum_tnk(z, k)
+        r += c
+        s += c*c
+    r /= m0
+    s /= m0
+    s = s - r*r
+    mcmc_avg(z, z.imp/2)
+    return (r,s)
+
+def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
+             k=0, md=0, sav=''):
     if not op:
         clf()
     if k == 0:
         k = z.ds[0].k
-    cols = ['b','g','r','c','m','y','k']
-    r,s = sum_tnk(z, k)
+    cols = ['k', 'b','g','r','c','m','y']
+    if md == 0:
+        r,s = sum_tnk(z, k)
+    else:
+        r,s = avg_tnk(z, k)
     tr = sum(r, axis=1)
     ts = sqrt(sum(s, axis=1))
     n = len(r[0])
@@ -1269,9 +1344,47 @@ def plot_tnk(z, op=0, nmin=8, nmax=11, kmax=6, pn0=4, pn1=12, k=0):
     pn1 = min(pn1, n+1)
     idx = range(pn0-1,pn1)
     errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[0])
+    labs = ['N-dist']
     for i in range(nmin, nmax+1):
         errorbar(xk[:kmax+1], y[i-1][:kmax+1], yerr=ye[i][:kmax+1], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
-    legend(['N-dist', 'L-dist N=8', 'L-dist N=9', 'L-dist N=10', 'L-dist N=11'])
+        labs.append('L-dist N=%d'%i)
+    legend(labs)
     xlabel('N/L')
     ylabel('Fraction')
+    if sav != '':
+        savefig(sav)
     
+def plot_icx(z, op=0, sav=''):
+    if not op:
+        clf()
+    cols = ['k', 'b','g','r','c','m','y']
+    c0,e0,tc = sel_icx(z, 0)
+    c1,e1,tc = sel_icx(z, 1)
+    c2,e2,tc = sel_icx(z, 2)
+    xlim(120, 660)
+    ylim(1e-3, 0.2)
+    semilogy(c0+1e-8, color=cols[0])
+    semilogy(c1+1e-8, marker='o', color=cols[1])
+    semilogy(c2+1e-8, marker='o', color=cols[2])
+    labs = ['2p+', '2p-', '2s+']
+    legend(labs)
+    v = z.ds[0].rd.v/100
+    w1 = where(c1 > 5e-3)
+    w2 = where(c2 > 5e-3)
+    w1 = w1[0][0]
+    w2 = w2[0][0]
+    n1 = z.ds[0].rd.n[w1][-8:-5]
+    n2 = z.ds[0].rd.n[w2][-8:-5]
+    n1 = '%s J=%d'%(n1, z.ds[0].rd.j[w1]/2)
+    n2 = '%s J=%d'%(n2, z.ds[0].rd.j[w2]/2)
+    text(w1, c1[w1]*1.1, n1, color=cols[1])
+    text(w2, c2[w2]*1.1, n2, color=cols[2])
+    for n in range(6, 13):
+        w = where(v == n)
+        w = w[0]
+        i = argmax(c0[w])
+        text(w[i], 1.1*c0[w[i]], 'N=%d'%n, horizontalalignment='center')
+    xlabel('Level Index')
+    ylabel('Relative Cross Section')
+    if sav != '':
+        savefig(sav)
