@@ -1169,9 +1169,11 @@ def plot_ink(z, i, op=0, col=0, xoffset=0, sav=''):
 def plot_snk(z, sav=''):
     plot_ink(z, 0)    
     plot_ink(z, 1, op=1, col=-1)
-    plot_ink(z, 2, op=1, col=-2, sav=sav)
+    plot_ink(z, 2, op=1, col=-2)
     labs = ['H-Like', 'He-Like Singlet', 'He-Like Triplet']
     legend(labs)
+    if sav != '':
+        savefig(sav)
     
 def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0):
     fm = z.sp
