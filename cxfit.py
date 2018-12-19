@@ -1248,10 +1248,11 @@ def sel_icx(z, ic, k = 0):
             break
     n = len(c)
     a = d.rd.n[n+ic]
-    for i in range(len(c)):
-        if not d.rd.n[i].startswith(a):
-            c[i] = 0.0
-            e[i] = 0.0
+    if d.k > 1:
+        for i in range(len(c)):
+            if not d.rd.n[i].startswith(a):
+                c[i] = 0.0
+                e[i] = 0.0
     return (c/tc,sqrt(e)/tc,tc)
     
 def sum_icx(z, k = 0):
@@ -1354,32 +1355,39 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     if sav != '':
         savefig(sav)
     
-def plot_icx(z, op=0, sav=''):
+def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[120, 660], yr=[1e-3, 0.25]):
     if not op:
         clf()
+    if k == 0:
+        k = z.ds[0].k
+    for d in z.ds:
+        if d.k == k:
+            break
     cols = ['k', 'b','g','r','c','m','y']
-    c0,e0,tc = sel_icx(z, 0)
-    c1,e1,tc = sel_icx(z, 1)
-    c2,e2,tc = sel_icx(z, 2)
-    xlim(120, 660)
-    ylim(1e-3, 0.2)
+    c0,e0,tc = sel_icx(z, 0, k)
+    if d.k == 10:
+        c1,e1,tc = sel_icx(z, 1, k)
+        c2,e2,tc = sel_icx(z, 2, k)
+    xlim(xr[0], xr[1])
+    ylim(yr[0], yr[1])
     semilogy(c0+1e-8, color=cols[0])
-    semilogy(c1+1e-8, marker='o', color=cols[1])
-    semilogy(c2+1e-8, marker='o', color=cols[2])
-    labs = ['2p+', '2p-', '2s+']
-    legend(labs)
-    v = z.ds[0].rd.v/100
-    w1 = where(c1 > 5e-3)
-    w2 = where(c2 > 5e-3)
-    w1 = w1[0][0]
-    w2 = w2[0][0]
-    n1 = z.ds[0].rd.n[w1][-8:-5]
-    n2 = z.ds[0].rd.n[w2][-8:-5]
-    n1 = '%s J=%d'%(n1, z.ds[0].rd.j[w1]/2)
-    n2 = '%s J=%d'%(n2, z.ds[0].rd.j[w2]/2)
-    text(w1, c1[w1]*1.1, n1, color=cols[1])
-    text(w2, c2[w2]*1.1, n2, color=cols[2])
-    for n in range(6, 13):
+    v = d.rd.v/100
+    if d.k == 10:
+        semilogy(c1+1e-8, marker='o', color=cols[1])
+        semilogy(c2+1e-8, marker='o', color=cols[2])
+        labs = ['2p+', '2p-', '2s+']
+        legend(labs)
+        w1 = where(c1 > 5e-3)
+        w2 = where(c2 > 5e-3)
+        w1 = w1[0][0]
+        w2 = w2[0][0]
+        n1 = d.rd.n[w1][-8:-5]
+        n2 = d.rd.n[w2][-8:-5]
+        n1 = '%s J=%d'%(n1, d.rd.j[w1]/2)
+        n2 = '%s J=%d'%(n2, d.rd.j[w2]/2)
+        text(w1, c1[w1]*1.1, n1, color=cols[1])
+        text(w2, c2[w2]*1.1, n2, color=cols[2])
+    for n in range(nmin, nmax+1):
         w = where(v == n)
         w = w[0]
         i = argmax(c0[w])
