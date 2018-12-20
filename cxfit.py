@@ -1027,15 +1027,16 @@ def rebin_spec(elo, ehi, yd, ye, nr):
         ye1[i] = sqrt(sum(ye[ir:ir+nr]**2))
     return (elo1,ehi1,yd1,ye1)
 
-def mod_spec(z, df, ws, stype, er=[]):
+def mod_spec(z, df, stype, er=[]):
     s = read_spec(df, stype, er)
-    zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide, z.iid, z.ia, z.iw, z.frej, z.rrej)
+    zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide0, z.ide1, z.iid, z.ia, z.iw, z.frej, z.rrej)
     for i in range(len(zm.ds)):
+        ws = z.ds[i].ws
         if i < len(ws):
             iws = ws[i]
         else:
             iws = 0
-        zm.ds[i] = ion_data(z.ds[i].z, z.ds[i].k, z.ds[i].ns, iws, elo[0], ehi[-1])
+        zm.ds[i] = ion_data(z.ds[i].z, z.ds[i].k, z.ds[i].ns, ws, s.elo[0], s.ehi[-1], ddir=z.ds[i].ddir, sdir=z.ds[i].sdir, kmin=z.ds[i].kmin, kmax=z.ds[i].kmax)
     mcmc_avg(zm, zm.imp/2, zm.imp)
     return zm
 
@@ -1166,35 +1167,48 @@ def plot_ink(z, i, op=0, col=0, xoffset=0, sav=''):
     if sav != '':
         savefig(sav)
 
-def plot_snk(z, sav=''):
-    plot_ink(z, 0)    
-    plot_ink(z, 1, op=1, col=-1)
-    plot_ink(z, 2, op=1, col=-2)
+def plot_snk(z, sav='', op=0, xoffset=0):
+    cols = ['k', 'b','g','r','c','m','y']
+    if not op:
+        clf()
+    for i in range(len(z.ds)):
+        if len(z.ds[i].ns) > 1:
+            errorbar(array(z.ds[i].ns)+0.1+xoffset, z.ds[i].an[:-1], yerr=z.ds[i].ae[:-1], capsize=3, marker='o', color=cols[i%len(cols)])
     labs = ['H-Like', 'He-Like Singlet', 'He-Like Triplet']
+    for i in range(len(z.ds)):
+        errorbar(z.ds[i].xk-0.1+xoffset, z.ds[i].wk, yerr=z.ds[i].we, capsize=3, marker='o', color=cols[i%len(cols)])
     legend(labs)
     if sav != '':
         savefig(sav)
     
-def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0):
+def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
     fm = z.sp
     if not op:
         clf()
+    if effc == 0:
+        yd = fm.yc
+        ym = z.ym
+        ye = sqrt(yd)
+    else:
+        yd = fm.yd
+        ym = z.ym/fm.eff
+        ye = fm.ye
     if res == 0:
         if ymax > 0:
             ylim(-ymax*0.01, ymax)
         if ylog > 0:
-            ymin = max(fm.yd)*ylog
-            semilogy(fm.em, ymin+fm.yd)
-            semilogy(fm.em, ymin+z.ym/fm.eff)
+            ymin = max(yd)*ylog
+            semilogy(fm.em, ymin+yd)
+            semilogy(fm.em, ymin+ym)
         else:
-            plot(fm.em, fm.yd)
-            plot(fm.em, z.ym/fm.eff)
+            plot(fm.em, yd)
+            plot(fm.em, ym)
         ylabel('Intensity')
     else:
-        r = fm.yd-z.ym/fm.eff
-        w = where(fm.ye > 0)
-        r[w] /= fm.ye[w]
-        w = where(fm.ye <= 0)
+        r = yd-ym
+        w = where(ye > 0)
+        r[w] /= ye[w]
+        w = where(ye <= 0)
         r[w] = 0
         plot(fm.em, r)
         ylabel('Residual')
@@ -1382,8 +1396,8 @@ def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[120, 660], yr=[1e-3, 0.2
         semilogy(c2+1e-8, marker='o', color=cols[2])
         labs = ['2p+', '2p-', '2s+']
         legend(labs)
-        w1 = where(c1 > 5e-3)
-        w2 = where(c2 > 5e-3)
+        w1 = where(c1 > 0.1*max(c1))
+        w2 = where(c2 > 0.1*max(c2))
         w1 = w1[0][0]
         w2 = w2[0][0]
         n1 = d.rd.n[w1][-8:-5]
