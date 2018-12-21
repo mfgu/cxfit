@@ -7,6 +7,7 @@ from pfac import fac
 from pfac import rfac
 from pfac import crm
 import pickle
+import time
 
 RadCas = namedtuple('RadCas', ['rd', 'r', 'ir0', 'ir1', 'egy', 'wa', 'ai', 'trm', 'tri', 'z', 'k', 'ide', 'de', 'im', 'nt', 'im1', 'na'])
 SpecData = namedtuple('SpecData', ['fns', 'stype', 'er', 'elo', 'ehi', 'em', 'yc', 'yd', 'eff', 'ye'])
@@ -15,7 +16,7 @@ IonData = namedtuple('IonData', ['ddir', 'sdir', 'ps0', 'ds0', 'rd', 'r', 'ir0',
                                  'z', 'k', 'ns', 'nm', 'kmin', 'kmax', 'an', 'ae', 'anr', 'wk0',
                                  'wk', 'we', 'swk', 'swe', 'xk',
                                  'ide', 'de', 'ws', 'emin', 'emax'])
-FitMCMC = namedtuple('FitMCMC', ['imp', 'sp', 'ym', 'mpa', 'mpe', 'ra', 'ds', 'rs', 'ap', 'hmp', 'ene','nde','ide0','ide1','iid', 'ia','iw','frej','rrej'])
+FitMCMC = namedtuple('FitMCMC', ['imp', 'sp', 'ym', 'mpa', 'mpe', 'ra', 'ds', 'rs', 'ap', 'hmp', 'ene','nde','ide0','ide1','iid', 'ia','iw','frej','rrej', 'ierr'])
     
 def rcs(f):
     r = loadtxt(f)
@@ -465,8 +466,26 @@ def load_ecf(ds, ecf):
                             elif m[i] == 2:
                                 d.de[s] = d.egy[s] - d.egy[t]
                                 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf=''):
+def logqx(x):
+    x = abs(x)
+    b1 =  0.319381530
+    b2 = -0.356563782
+    b3 =  1.781477937
+    b4 = -1.821255978
+    b5 =  1.330274429
+    t = 1.0/(1+0.2316419*x)
+    t2 = t*t
+    t3 = t2*t
+    t4 = t3*t
+    t5 = t4*t
+    zx = -0.5*x*x + log(b1*t + b2*t2 + b3*t3 + b4*t4 + b5*t5) - 0.918938533205
+    return zx
+
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=0.1):
+    t0 = time.time()
     yd = sp.yc + yb
+    wyg = where(yd >= 10)[0]
+    wys = where(yd < 10)[0]
     eff = sp.eff
     elo = sp.elo
     ehi = sp.ehi
@@ -478,7 +497,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     for i in range(1, nfac):
         lnfac[i] = lnfac[i-1]+log(i)
     lnydi = lnfac[yi] + (yd-yi)*(lnfac[yi+1]-lnfac[yi])
-    lnydi -= log(sqrt(2*pi*yd))
+    lnysi = log(sqrt(2*pi*yd))
+    lnydi -= lnysi
     slnydi = sum(lnydi)
     na = 0
     nw = 0
@@ -539,7 +559,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     mp = zeros(np)
     ydm = 1e-5*yd
     yt = sum(yd/eff)
-    ye = sqrt(yd)
+    yd1 = yd+1.0
+    ye = sqrt(yd1)
     yte = sqrt(sum(yd))
     mp[:nsig] = sig
     ai0 = yt/ti
@@ -615,10 +636,23 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
         for ip in range(len(mps[1])):
             smp[ip] = mps[1][ip]
     optres = [None, None]
+    
     def cnorm(x):
         if (x > 0):
+            if x > 30:
+                z = logqx(x)
+                if z < -300:
+                    return 1.0
+                else:
+                    return 1-exp(z)
             return 1-fin0(-x)
         elif (x < 0):
+            if x < -30:
+                z = logqx(x)
+                if z < -300:
+                    return 0.0
+                else:
+                    return exp(z)
             return fin0(x)
         else:
             return 0.5
@@ -677,7 +711,53 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     def ilnlikely(ip):
         getym(ip)
         yt = y + yb
-        r = yd*log(yt)-yt-lnydi
+        if ierr <= 0:
+            r = yd*log(yt)-yt-lnydi            
+        else:
+            r = zeros(nd)
+            yt0 = yt*(1-ierr)
+            yt1 = yt*(1+ierr)
+            dyt = yt1-yt0
+            if len(wys) > 0:
+                r[wys] = special.gammainc(yd1[wys], yt1[wys]) - special.gammainc(yd1[wys], yt0[wys])
+                r[wys] = log(r[wys]/dyt[wys]) + lnysi[wys]
+            if len(wyg) > 0:
+                dy1 = (yt1[wyg]-yd1[wyg])/ye[wyg]
+                dy0 = (yt0[wyg]-yd1[wyg])/ye[wyg]
+                q1 = logqx(dy1)
+                q0 = logqx(dy0)
+                w = where(logical_and(dy1 > 0, dy0 > 0))
+                w = w[0]
+                if len(w) > 0:
+                    wi = wyg[w]
+                    dq = q1[w]-q0[w]
+                    qr = zeros(len(w))
+                    i = where(dq > -300)
+                    qr[i] = exp(dq[i])
+                    r[wi] = q0[w] + log(1 - qr)
+                w = where(logical_and(dy1 < 0, dy0 < 0))
+                w = w[0]
+                if len(w) > 0:
+                    wi = wyg[w]
+                    dq = q0[w]-q1[w]
+                    qr = zeros(len(w))
+                    i = where(dq > -300)
+                    qr[i] = exp(dq[i])
+                    r[wi] = q1[w] + log(1-qr)
+                w = where(logical_and(dy1 > 0, dy0 < 0))
+                w = w[0]
+                if len(w) > 0:
+                    wi = wyg[w]
+                    i = where(q1[w] > -300)
+                    i = i[0]                    
+                    wii = wi[i]
+                    r[wii] += exp(q1[w[i]])
+                    i = where(q0[w] > -300)
+                    i = i[0]
+                    wii = wi[i]
+                    r[wii] += exp(q0[w[i]])
+                    r[wi] = log(1-r[wi])
+                r[wyg] = r[wyg]-log(dyt[wyg]) + lnysi[wyg]
         return r
     
     def lnlikely(ip):
@@ -993,7 +1073,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
                 pp.append(0.0)
         print('imc: %6d %7.1E %7.1E %7.1E %7.1E %7.1E %12.5E %8.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E'%tuple(pp))
         if i == imp-1 or (nsav > 0 and (i+1)%nsav == 0):
-            print('pickling: %s'%(fsav))
+            print('pickling: %s %10.3E'%(fsav, time.time()-t0))
             if nsav > 0:
                 fs = open(fsav, 'w')
             for ii in range(ni):
@@ -1005,31 +1085,43 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
                     ij = fixld[ii]
                     if ij >= 0 and ij < ni:
                         hmp[:,iw[ii]:iw[ii+1]] = hmp[:,iw[ij]:iw[ij+1]]
-            zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, frej, rrej)
+            zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, frej, rrej, ierr)
             mcmc_avg(zi, i/2)
             if nsav > 0:
                 pickle.dump(zi, fs)
-                fs.close()   
+                fs.close()
+    print('done: %10.3E'%(time.time()-t0))
     return zi
 
-def rebin_spec(elo, ehi, yd, ye, nr):
+def rebin_spec(s, nr):
+    elo = s.elo
+    ehi = s.ehi
+    yd = s.yd
+    yc = s.yc
+    ye = s.ye
+    eff = s.eff
     nd = len(elo)
     n1 = nd/nr
     elo1 = zeros(n1)
     ehi1 = zeros(n1)
+    yc1 = zeros(n1)
     yd1 = zeros(n1)
     ye1 = zeros(n1)
+    eff1 = zeros(n1)
     for i in range(n1):
         ir = i*nr
         elo1[i] = elo[ir]
         ehi1[i] = ehi[ir+nr-1]
         yd1[i] = sum(yd[ir:ir+nr])
         ye1[i] = sqrt(sum(ye[ir:ir+nr]**2))
-    return (elo1,ehi1,yd1,ye1)
+        eff1[i] = mean(eff[ir:ir+nr])
+        yc1[i] = sum(yc[ir:ir+nr])
+    
+    return SpecData(s.fns, s.stype, s.er, elo1, ehi1, 0.5*(elo1+ehi1), yc1, yd1,eff1, ye1)
 
 def mod_spec(z, df, stype, er=[]):
     s = read_spec(df, stype, er)
-    zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide0, z.ide1, z.iid, z.ia, z.iw, z.frej, z.rrej)
+    zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide0, z.ide1, z.iid, z.ia, z.iw, z.frej, z.rrej, z.ierr)
     for i in range(len(zm.ds)):
         ws = z.ds[i].ws
         if i < len(ws):
@@ -1040,8 +1132,11 @@ def mod_spec(z, df, stype, er=[]):
     mcmc_avg(zm, zm.imp/2, zm.imp)
     return zm
 
-def fit_spec(df, z, ks, ns, ws, sig, eth, stype, er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
-             wb=[], wsig=[], sav=[], mps=[], nburn=0.25, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ddir='data', sdir='spec'):
+def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
+             er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
+             wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
+             nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
+             ddir='data', sdir='spec', ierr=0.1):
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
@@ -1071,7 +1166,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype, er=[], nmc=5000, fixld=[], fixn
         di = ion_data(z, ki, nsi, iws, s.elo[0], s.ehi[-1], kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
         ds.append(di)
 
-    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf)
+    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr)
     return z
 
 def plot_ldist(z, op=0, sav=''):
@@ -1192,7 +1287,11 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
     else:
         yd = fm.yd
         ym = z.ym/fm.eff
-        ye = fm.ye
+        ye = fm.ye.copy()
+    if z.ierr > 0:
+        ye1 = z.ierr*ym
+        w = where(ye < ye1)
+        ye[w] = ye1[w]
     if res == 0:
         if ymax > 0:
             ylim(-ymax*0.01, ymax)
@@ -1366,7 +1465,7 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[0])
     labs = ['N-dist']
     for i in range(nmin, nmax+1):
-        errorbar(xk[:kmax+1], y[i-1][:kmax+1], yerr=ye[i][:kmax+1], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
+        errorbar(xk[:kmax+1], y[i-1][:kmax+1], yerr=ye[i-1][:kmax+1], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
         labs.append('L-dist N=%d'%i)
     legend(labs)
     xlabel('N/L')
@@ -1374,7 +1473,7 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     if sav != '':
         savefig(sav)
     
-def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[120, 660], yr=[1e-3, 0.25]):
+def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[110, 670], yr=[1e-3, 0.25]):
     if not op:
         clf()
     if k == 0:
@@ -1396,21 +1495,33 @@ def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[120, 660], yr=[1e-3, 0.2
         semilogy(c2+1e-8, marker='o', color=cols[2])
         labs = ['2p+', '2p-', '2s+']
         legend(labs)
-        w1 = where(c1 > 0.1*max(c1))
-        w2 = where(c2 > 0.1*max(c2))
-        w1 = w1[0][0]
-        w2 = w2[0][0]
-        n1 = d.rd.n[w1][-8:-5]
-        n2 = d.rd.n[w2][-8:-5]
+        w1 = argmax(c1)
+        w2 = argmax(c2)
+        if v[w1] >= 10:
+            n1 = d.rd.n[w1][-9:-5]
+        else:
+            n1 = d.rd.n[w1][-8:-5]
+        if v[w2] >= 10:
+            n2 = d.rd.n[w2][-9:-5]
+        else:
+            n2 = d.rd.n[w2][-8:-5]
         n1 = '%s J=%d'%(n1, d.rd.j[w1]/2)
         n2 = '%s J=%d'%(n2, d.rd.j[w2]/2)
-        text(w1, c1[w1]*1.1, n1, color=cols[1])
-        text(w2, c2[w2]*1.1, n2, color=cols[2])
+        text(w1, c1[w1]*1.15, n1, color=cols[1])
+        text(w2, c2[w2]*1.15, n2, color=cols[2])
     for n in range(nmin, nmax+1):
         w = where(v == n)
         w = w[0]
         i = argmax(c0[w])
-        text(w[i], 1.1*c0[w[i]], 'N=%d'%n, horizontalalignment='center')
+        if n >= 10:
+            ip = -9
+        else:
+            ip = -8
+        if d.rd.j[w[i]]%2 == 0:
+            ns = '%s J=%d'%(d.rd.n[w[i]][ip:-5], d.rd.j[w[i]]/2)
+        else:
+            ns = '%s J=%d/2'%(d.rd.n[w[i]][ip:-5], d.rd.j[w[i]])            
+        text(w[i], 1.15*c0[w[i]], ns, horizontalalignment='center')
     xlabel('Level Index')
     ylabel('Relative Cross Section')
     if sav != '':
