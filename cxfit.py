@@ -338,17 +338,20 @@ def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
     iid = z.iid
     if m1 <= 0:
         m1 = z.imp
-    r = z.ene[m1-m:m1]
+    m0 = m1-m
+    if m0 < 0.1*m1:
+        m0 = int32(0.1*m1)
+    r = z.ene[m0:m1]
     ra = mean(r)
     rd = std(r)
-    wr = m1-m+arange(m, dtype=int32)
+    wr = m0+arange(m, dtype=int32)
     wr0 = wr
     if eps > -1e30:
         wr = where(r > ra+eps*rd)
-        wr = wr[0]+m1-m
+        wr = wr[0]+m0
     elif rmin > -1e30:
         wr = where(r > rmin)
-        wr = wr[0]+m1-m
+        wr = wr[0]+m0
     for ip in range(np):
         x = z.hmp[wr,ip]
         x0 = z.hmp[wr0, ip]
@@ -504,7 +507,7 @@ def logqx(x):
     zx = -0.5*x*x + log(b1*t + b2*t2 + b3*t3 + b4*t4 + b5*t5) - 0.918938533205
     return zx
 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=0.1):
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=0.05):
     t0 = time.time()
     yd = sp.yc + yb
     wyg = where(yd >= 10)[0]
@@ -743,7 +746,14 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
             dyt = yt1-yt0
             if len(wys) > 0:
                 r[wys] = special.gammainc(yd1[wys], yt1[wys]) - special.gammainc(yd1[wys], yt0[wys])
-                r[wys] = log(r[wys]/dyt[wys]) + lnysi[wys]
+                i = where(r[wys] > 0)
+                i = wys[i[0]]
+                if len(i) > 0:
+                    r[i] = log(r[i]/dyt[i]) + lnysi[i]
+                i = where(r[wys]<=0)
+                i = wys[i[0]]
+                if len(i) > 0:
+                    r[i] = yd[i]*log(yt[i])-yt[i]-lnydi[i]
             if len(wyg) > 0:
                 dy1 = (yt1[wyg]-yd1[wyg])/ye[wyg]
                 dy0 = (yt0[wyg]-yd1[wyg])/ye[wyg]
@@ -1159,7 +1169,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
-             ddir='data', sdir='spec', ierr=0.1):
+             ddir='data', sdir='spec', ierr=0.05):
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
@@ -1496,7 +1506,7 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     if sav != '':
         savefig(sav)
     
-def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[110, 670], yr=[1e-3, 0.25]):
+def plot_icx(z, op=0, sav='', k=0, xr=[110, 670], yr=[1e-3, 0.25]):
     if not op:
         clf()
     if k == 0:
@@ -1504,6 +1514,8 @@ def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[110, 670], yr=[1e-3, 0.2
     for d in z.ds:
         if d.k == k:
             break
+    nmin = min(d.ns)
+    nmax = max(d.ns)
     cols = ['k', 'b','g','r','c','m','y']
     c0,e0,tc = sel_icx(z, 0, k)
     if d.k == 10:
@@ -1536,10 +1548,12 @@ def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[110, 670], yr=[1e-3, 0.2
         w = where(v == n)
         w = w[0]
         i = argmax(c0[w])
+        if c0[w[i]] < yr[0]*1.1:
+            continue
         if n >= 10:
             ip = -9
         else:
-            ip = -8
+            ip = -8        
         if d.rd.j[w[i]]%2 == 0:
             ns = '%s J=%d'%(d.rd.n[w[i]][ip:-5], d.rd.j[w[i]]/2)
         else:
@@ -1549,3 +1563,7 @@ def plot_icx(z, op=0, sav='', k=0, nmin=6, nmax=12, xr=[110, 670], yr=[1e-3, 0.2
     ylabel('Relative Cross Section')
     if sav != '':
         savefig(sav)
+
+def plot_kcx(z, sav='', xr=[50, 250]):
+    plot_icx(z, k=1, xr=xr, yr=[1e-4, 1])
+    plot_icx(z, k=2, xr=xr, yr=[1e-4, 1], op=1)
