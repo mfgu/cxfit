@@ -193,6 +193,29 @@ def escape_peak(x, beta, gamma):
     y = yc + x*beta
     return y
 
+def convolve(e, s, sig, emin=-1, emax=-1, nde=3):
+    de = sig/nde
+    if emin <= 0:
+        emin = max(0, min(e)-5*sig)
+    if emax <= 0:
+        emax = max(e)+5*sig
+
+    em = arange(emin, emax, de)
+    elo = em-0.5*de
+    ehi = em+0.5*de
+    nt = len(e)
+    nd = len(em)
+    wf = 0.3989423*(ehi-elo)/sig    
+    y = zeros(nd)
+    for i in range(nt):
+        x = (em-e[i])/sig
+        ax = abs(x)
+        w = where(x < 10.0)
+        w = w[0]
+        if len(w) > 0:
+            y[w] += wf[w]*s[i]*exp(-0.5*x[w]*x[w])
+    return SpecData('', -1, [emin,emax], elo, ehi, em, y, None, None, None)
+
 def response(d, s, sig):
     elo = s.elo
     ehi = s.ehi
@@ -1290,7 +1313,7 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
         ye = fm.ye.copy()
     if z.ierr > 0:
         ye1 = z.ierr*ym
-        w = where(ye < ye1)
+        w = where(logical_and(ye < ye1, ye1 > 1))
         ye[w] = ye1[w]
     if res == 0:
         if ymax > 0:
