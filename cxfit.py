@@ -756,7 +756,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
             iy[i,:] = matmul(ap[i], wk)*eff
             iye[:] += (iea[i]*iy[i])**2
         y[:] = sum(iy, axis=0)
-        iye[:] = sqrt(iye+(min(iea)*yb)**2)
+        iye[:] = sqrt(iye+(max(ierr)*yb)**2)
         
     def ilnlikely(ip):
         getym(ip)
