@@ -507,7 +507,7 @@ def logqx(x):
     zx = -0.5*x*x + log(b1*t + b2*t2 + b3*t3 + b4*t4 + b5*t5) - 0.918938533205
     return zx
 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=0.05):
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=[], sde=3.0):
     t0 = time.time()
     yd = sp.yc + yb
     wyg = where(yd >= 10)[0]
@@ -538,8 +538,15 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     d0 = ds[0]
     i0 = 0
     load_ecf(ds, ecf)
+    k0 = 1000
+    k1 = 0
     for ii in range(len(ds)):
         d = ds[ii]
+        if d.k > 0:
+            if d.k > k1:
+                k1 = d.k
+            if d.k < k0:
+                k0 = d.k
         if d.k != d0.k:
             w = where(d0.ide == 1)
             nde0 = nde
@@ -563,6 +570,16 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
         if (len(ww[0]) > 0):
             d.ide[w[0][ww]] = 1
 
+    iea = zeros(ni)
+    if len(ierr) > 0:
+        ie = atleast_1d(ierr)
+        for i in range(ni):
+            j = ds[i].k-k0
+            if j >= 0:
+                if j < len(ie):
+                    iea[i] = ie[j]
+                else:
+                    iea[i] = ie[-1]
     w = where(d0.ide == 1)
     nde0 = nde
     nde = nde + len(w[0])
@@ -614,8 +631,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     for i in range(len(wsig)):
         mp0[i] = wsig[i][0]
         mp1[i] = wsig[i][1]
-    mp0[nsig:nde1] = -2.0
-    mp1[nsig:nde1] = 2.0
+    mp0[nsig:nde1] = -sde
+    mp1[nsig:nde1] = sde
     for ii in range(ni):
         if ds[ii].k == 0:
             mp0[ide0[ii]:ide1[ii]] = -100.0
@@ -643,10 +660,12 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
             de0.append(dd)
         else:
             de0.append(None)
-    ap = zeros((nd,nw))
+    ap = zeros((ni,nd,nw))
     rs = [None for i in range(len(ds))]
     rs0 = [None for i in range(len(ds))]
     y = zeros(nd)
+    iye = zeros(nd)
+    iy = zeros((ni,nd))
     xin = arange(-30.0, 0.05, 0.05)
     xin[-1] = 0.0
     yin = integrate.cumtrapz(normpdf(xin, 0.0, 1.0), xin, initial=0.0)
@@ -724,25 +743,30 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
                     wki = mp[ia[ii]:ia[ii+1]]
                     mp[ia[i]:ia[i+1]] = 0.0
                     mp[ia[i]:ia[i+1]] = wki
-        ap[:,:] = 0.0
+        ap[:,:,:] = 0.0
         for i in range(ni):
             x = mp[ia[i]:ia[i+1]]
             for k in range(len(ds[i].ns)):
-                ap[:,iw0[i]:iw0[i+1]] += rs[i].aj[k]*x[k]*mp[iid[i]]
+                ap[i,:,iw0[i]:iw0[i+1]] += rs[i].aj[k]*x[k]*mp[iid[i]]
             wz = where(ds[i].zai > 0)
             mp[iw[i]+wz[0]] = 0.0
-        wk = mp[iw[0]:iw[-1]]        
-        y[:] = matmul(ap, wk)*eff
-
+        wk = mp[iw[0]:iw[-1]]
+        iye[:] = 0.0
+        for i in range(ni):
+            iy[i,:] = matmul(ap[i], wk)*eff
+            iye[:] += (iea[i]*iy[i])**2
+        y[:] = sum(iy, axis=0)
+        iye[:] = sqrt(iye+(min(iea)*yb)**2)
+        
     def ilnlikely(ip):
         getym(ip)
         yt = y + yb
-        if ierr <= 0:
+        if len(ierr) == 0:
             r = yd*log(yt)-yt-lnydi            
         else:
             r = zeros(nd)
-            yt0 = yt*(1-ierr)
-            yt1 = yt*(1+ierr)
+            yt0 = yt - iye
+            yt1 = yt + iye
             dyt = yt1-yt0
             if len(wys) > 0:
                 r[wys] = special.gammainc(yd1[wys], yt1[wys]) - special.gammainc(yd1[wys], yt0[wys])
@@ -1118,7 +1142,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
                     ij = fixld[ii]
                     if ij >= 0 and ij < ni:
                         hmp[:,iw[ii]:iw[ii+1]] = hmp[:,iw[ij]:iw[ij+1]]
-            zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, frej, rrej, ierr)
+            zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, frej, rrej, (iea,iye))
             mcmc_avg(zi, i/2)
             if nsav > 0:
                 pickle.dump(zi, fs)
@@ -1169,7 +1193,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
-             ddir='data', sdir='spec', ierr=0.05):
+             ddir='data', sdir='spec', ierr=[], sde=3.0):
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
@@ -1199,7 +1223,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
         di = ion_data(z, ki, nsi, iws, s.elo[0], s.ehi[-1], kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
         ds.append(di)
 
-    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr)
+    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, sde)
     return z
 
 def plot_ldist(z, op=0, sav=''):
@@ -1321,10 +1345,13 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
         yd = fm.yd
         ym = z.ym/fm.eff
         ye = fm.ye.copy()
-    if z.ierr > 0:
+    ye1 = zeros(len(yd))
+    if type(z.ierr) == type(0.0):
         ye1 = z.ierr*ym
-        w = where(logical_and(ye < ye1, ye1 > 1))
-        ye[w] = ye1[w]
+    else:
+        ye1 = z.ierr[1]
+    w = where(logical_and(ye < ye1, ye1 > 1))
+    ye[w] = ye1[w]
     if res == 0:
         if ymax > 0:
             ylim(-ymax*0.01, ymax)
@@ -1376,7 +1403,7 @@ def sum_cx(d):
         e[:] += y*y*((d.anr[-1]*d.ae[i])**2+((d.ae[-1]*d.anr[i])**2))
     return (c,e)
 
-def sum_tcx(z, k=0):
+def sum_tcx(z, k=0, ws=0):
     c = 0.0
     e = 0.0
     if k == 0:
@@ -1384,15 +1411,18 @@ def sum_tcx(z, k=0):
     for d in z.ds:
         if d.k != k:
             continue
+        if ws > 0:
+            if d.ws[0]%100 != ws:
+                continue
         ci, ei = sum_cx(d)
         c += ci
         e += ei
     return (c,e)
 
-def sel_icx(z, ic, k = 0):
+def sel_icx(z, ic, k = 0, ws = 0):
     if k == 0:
         k = z.ds[0].k
-    c,e = sum_tcx(z, k)
+    c,e = sum_tcx(z, k, ws)
     tc = sum(c)
     for d in z.ds:
         if d.k == k:
@@ -1406,10 +1436,10 @@ def sel_icx(z, ic, k = 0):
                 e[i] = 0.0
     return (c/tc,sqrt(e)/tc,tc)
     
-def sum_icx(z, k = 0):
+def sum_icx(z, k = 0, ws = 0):
     if k == 0:
         k = z.ds[0].k
-    c,e = sum_tcx(z, k)
+    c,e = sum_tcx(z, k, ws)
     tc = sum(c)
     for d in z.ds:
         if d.k == k:
@@ -1426,10 +1456,10 @@ def sum_icx(z, k = 0):
                 rs[j] += e[i]
     return (r/tc,sqrt(rs)/tc,tc)
 
-def sum_tnk(z, k=0):
+def sum_tnk(z, k=0, ws = 0):
     if k == 0:
         k = z.ds[0].k
-    c,e = sum_tcx(z, k)
+    c,e = sum_tcx(z, k, ws)
     for d in z.ds:
         if d.k == k:
             break
@@ -1446,7 +1476,7 @@ def sum_tnk(z, k=0):
             s[n,j] += sum(e[w])
     return (r,s)
 
-def avg_tnk(z, k=0, m=0.25):
+def avg_tnk(z, k=0, ws=0, m=0.25):
     if k == 0:
         k = z.ds[0].k
     for d in z.ds:
@@ -1465,7 +1495,7 @@ def avg_tnk(z, k=0, m=0.25):
         m0 = int32(m)    
     for i in range(z.imp-m0, z.imp):
         mcmc_cmp(z, i)
-        c,e = sum_tnk(z, k)
+        c,e = sum_tnk(z, k, ws)
         r += c
         s += c*c
     r /= m0
@@ -1475,16 +1505,16 @@ def avg_tnk(z, k=0, m=0.25):
     return (r,s)
 
 def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
-             k=0, md=0, sav=''):
+             k=0, md=0, sav='', ws=0):
     if not op:
         clf()
     if k == 0:
         k = z.ds[0].k
     cols = ['k', 'b','g','r','c','m','y']
     if md == 0:
-        r,s = sum_tnk(z, k)
+        r,s = sum_tnk(z, k, ws)
     else:
-        r,s = avg_tnk(z, k)
+        r,s = avg_tnk(z, k, ws)
     tr = sum(r, axis=1)
     ts = sqrt(sum(s, axis=1))
     n = len(r[0])
@@ -1498,7 +1528,8 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[0])
     labs = ['N-dist']
     for i in range(nmin, nmax+1):
-        errorbar(xk[:kmax+1], y[i-1][:kmax+1], yerr=ye[i-1][:kmax+1], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
+        km = min(kmax+1, i)
+        errorbar(xk[:km], y[i-1][:km], yerr=ye[i-1][:km], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
         labs.append('L-dist N=%d'%i)
     legend(labs)
     xlabel('N/L')
@@ -1516,6 +1547,10 @@ def plot_icx(z, op=0, sav='', k=0, xr=[110, 670], yr=[1e-3, 0.25]):
             break
     nmin = min(d.ns)
     nmax = max(d.ns)
+    for d1 in z.ds:
+        if d1.k == k:
+            nmin = min(min(d1.ns),nmin)
+            nmax = max(max(d1.ns),nmax)
     cols = ['k', 'b','g','r','c','m','y']
     c0,e0,tc = sel_icx(z, 0, k)
     if d.k == 10:
