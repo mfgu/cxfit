@@ -507,7 +507,7 @@ def logqx(x):
     zx = -0.5*x*x + log(b1*t + b2*t2 + b3*t3 + b4*t4 + b5*t5) - 0.918938533205
     return zx
 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=[], sde=3.0):
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=[0.5], sde=3.0):
     t0 = time.time()
     yd = sp.yc + yb
     wyg = where(yd >= 10)[0]
@@ -571,8 +571,10 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
             d.ide[w[0][ww]] = 1
 
     iea = zeros(ni)
+    merr = 0.0
     if len(ierr) > 0:
         ie = atleast_1d(ierr)
+        merr = max(ie)
         for i in range(ni):
             j = ds[i].k-k0
             if j >= 0:
@@ -756,7 +758,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
             iy[i,:] = matmul(ap[i], wk)*eff
             iye[:] += (iea[i]*iy[i])**2
         y[:] = sum(iy, axis=0)
-        iye[:] = sqrt(iye+(max(ierr)*yb)**2)
+        iye[:] = sqrt(iye+(merr*yb)**2)
         
     def ilnlikely(ip):
         getym(ip)
@@ -1193,7 +1195,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
-             ddir='data', sdir='spec', ierr=[], sde=3.0):
+             ddir='data', sdir='spec', ierr=[0.05], sde=3.0):
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
