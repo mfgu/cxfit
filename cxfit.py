@@ -16,7 +16,7 @@ IonData = namedtuple('IonData', ['ddir', 'sdir', 'ps0', 'ds0', 'rd', 'r', 'ir0',
                                  'z', 'k', 'ns', 'nm', 'kmin', 'kmax', 'an', 'ae', 'anr', 'wk0',
                                  'wk', 'we', 'swk', 'swe', 'xk',
                                  'ide', 'de', 'ws', 'emin', 'emax'])
-FitMCMC = namedtuple('FitMCMC', ['imp', 'sp', 'ym', 'mpa', 'mpe', 'ra', 'ds', 'rs', 'ap', 'hmp', 'ene','nde','ide0','ide1','iid', 'ia','iw','frej','rrej', 'ierr'])
+FitMCMC = namedtuple('FitMCMC', ['imp', 'sp', 'ym', 'mpa', 'mpe', 'ra', 'ds', 'rs', 'ap', 'hmp', 'ene','nde','ide0','ide1','iid', 'ia','iw','ib','bf','frej','rrej', 'ierr', 'fixnd', 'fixld'])
     
 def rcs(f):
     r = loadtxt(f)
@@ -174,6 +174,10 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
     an = zeros(nn+1)
     ae = zeros(nn+1)
     wk0 = fac.LandauZenerLD(z, nm, 5)
+    wk0 = wk0/sum(wk0)
+    w = where(zai > 0)
+    w = w[0]
+    wk0[w] = 0.0
     wk = zeros(nm)
     we = zeros(nm)
     swk = zeros(nm)
@@ -292,7 +296,7 @@ def calc_spec(d, r, ar=None):
         ar = 0.0
         for i in range(n):
             ar += d.anr[n]*d.anr[i]*r.aj[i]
-    y = matmul(ar, d.wk)
+    y = matmul(ar, d.wk)    
     return (y,ar)
 
 def scale_spec(yd0, ye):
@@ -379,6 +383,10 @@ def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
         z.rs[ii] = response(z.ds[ii], z.sp, z.mpa[:nsig])
         (y,r) = calc_spec(z.ds[ii], z.rs[ii])
         z.ym[:] += z.sp.eff*y
+    if len(z.ib) > 0:
+        if z.bf != None:
+            yb = z.bf(z.sp, z.mpa[z.ib])
+        z.ym[:] += yb*z.sp.eff
         
 def read_spec(df, stype, er=[]):
     if type(df) == tuple:
@@ -415,7 +423,7 @@ def read_spec(df, stype, er=[]):
             ye = d[3][w]
         elif stype == 1:
             if (len(er) == 0):
-                er = [2e3, 4e3]
+                er = [1.9e3, 4e3]
             w = where(logical_and(d[0] > er[0], d[0] < er[1]))
             nw = len(w[0])
             de = zeros(nw)
@@ -507,7 +515,27 @@ def logqx(x):
     zx = -0.5*x*x + log(b1*t + b2*t2 + b3*t3 + b4*t4 + b5*t5) - 0.918938533205
     return zx
 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='', yb=1e-2, ecf='', ierr=[0.5], sde=3.0):
+def ar_bkgd(s, p):
+    if len(p) == 3:
+        x0 = p[2]
+    else:
+        x0 = 3.1e3
+    x = (s.em-x0)/p[1]
+    y = zeros(len(s.em))
+    de = s.ehi-s.elo
+    w = where(x > 50)[0]
+    if len(w) > 0:
+        xw = exp(-x[w])
+        y[w] = p[0]*de[w]*xw/(1+xw)
+    w = where(x <= 50)[0]
+    if len(w) > 0:
+        y[w] = p[0]*de[w]/(1+exp(x[w]))
+    return y
+
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
+              wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='',
+              yb=1e-2, ecf='', ierr=[], wreg=[3.0, 30.0],
+              sde=3.0, bkgd=([],None)):
     t0 = time.time()
     yd = sp.yc + yb
     wyg = where(yd >= 10)[0]
@@ -582,6 +610,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
                     iea[i] = ie[j]
                 else:
                     iea[i] = ie[-1]
+    if len(bkgd) == 3:
+        merr = max([merr,bkgd[2]])
     w = where(d0.ide == 1)
     nde0 = nde
     nde = nde + len(w[0])
@@ -591,11 +621,15 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
         if i1 > i0:
             ds[i1].ide[:] = d0.ide
     nsig = len(sig)
-    ide0 = [nsig+x for x in ide0]
-    ide1 = [nsig+x for x in ide1]
-    nde1 = nde + nsig
+    bfun = bkgd[1]
+    nbp = len(bkgd[0])
+    nsb = nsig+nbp
+    ibp = range(nsig,nsb)
+    ide0 = [nsb+x for x in ide0]
+    ide1 = [nsb+x for x in ide1]
+    nde1 = nde + nsb
     nde2 = nde1 + ni
-    iid = range(nde1,nde2)
+    iid = range(nde1,nde2)    
     ia = [nde2+x for x in ia]
     iw0 = iw
     iw = [ia[-1]+x for x in iw]
@@ -619,12 +653,18 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     mp1 = zeros(np)
     smp = zeros(np)
     smp[:nsig] = 0.25*mp[:nsig]
-    smp[nsig:nde1] = 1.0
+    smp[nsb:nde1] = 1.0
     smp[iid] = 0.25*ai0
     smp[ia[0]:ia[-1]] = 0.1*mp[ia[0]:ia[-1]]
     smp[iw[0]:iw[-1]] = 0.1*mp[iw[0]:iw[-1]]
     mp0[:nsig] = sig*0.01
     mp1[:nsig] = sig*100.0
+    for i in range(nbp):
+        bp = bkgd[0][i]
+        mp[ibp[i]] = bp[0]
+        mp0[ibp[i]] = bp[1]
+        mp1[ibp[i]] = bp[2]
+        smp[ibp[i]] = bp[3]
     w = where(smp <= 0)
     smp[w] = 1e-5
     if (nsig == 2 or nsig == 5):
@@ -633,8 +673,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     for i in range(len(wsig)):
         mp0[i] = wsig[i][0]
         mp1[i] = wsig[i][1]
-    mp0[nsig:nde1] = -sde
-    mp1[nsig:nde1] = sde
+    mp0[nsb:nde1] = -sde
+    mp1[nsb:nde1] = sde
     for ii in range(ni):
         if ds[ii].k == 0:
             mp0[ide0[ii]:ide1[ii]] = -100.0
@@ -758,8 +798,16 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
             iy[i,:] = matmul(ap[i], wk)*eff
             iye[:] += (iea[i]*iy[i])**2
         y[:] = sum(iy, axis=0)
+        if nbp > 0:
+            if bfun == None:
+                ybk = mp[ibp[0]]*eff
+            else:
+                ybk = bfun(sp, mp[ibp])*eff
+            y[:] += ybk
+            if len(bkgd) == 3:
+                iye[:] += (ybk*bkgd[2])**2
         iye[:] = sqrt(iye+(merr*yb)**2)
-        
+                
     def ilnlikely(ip):
         getym(ip)
         yt = y + yb
@@ -822,6 +870,32 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
     def lnlikely(ip):
         r = ilnlikely(ip)
         r = sum(r)
+        if len(wreg) == 0:
+            return r
+        
+        for i in range(ni):
+            if len(fixld) > 0:
+                ii = fixld[i]
+                if ii >= 0 and ii < ni:
+                    continue
+            wk = mp[iw[i]:iw[i+1]]
+            w = where(ds[i].wk0 > 0)[0]
+            wk = wk[w]
+            wk0 = ds[i].wk0[w]
+            im = sum(wk0*ds[i].xk[w])/sum(wk0)
+            nk = len(wk)
+            if nk > 3:
+                for j in range(nk-1, 0, -1):
+                    if wk[j] > 0 and wk[j-1]/wk[j] < wk0[j-1]/wk0[j]:
+                        break
+                if j > im:
+                    dr = min(30.0, (j-im)*wreg[0])
+                    dr = exp(dr)
+                    r -= dr
+                if wk[-1] > wk0[-1]:
+                    dr = min(30.0, (wk[-1]-wk0[-1])*wreg[1])
+                    dr = exp(dr)
+                    r -= dr
         return r
 
     def eqanorm(x, ii):
@@ -1144,7 +1218,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[], wsig=[
                     ij = fixld[ii]
                     if ij >= 0 and ij < ni:
                         hmp[:,iw[ii]:iw[ii+1]] = hmp[:,iw[ij]:iw[ij+1]]
-            zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, frej, rrej, (iea,iye))
+            zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, ibp, bfun, frej, rrej, (iea,iye), fixnd, fixld)
             mcmc_avg(zi, i/2)
             if nsav > 0:
                 pickle.dump(zi, fs)
@@ -1180,7 +1254,7 @@ def rebin_spec(s, nr):
 
 def mod_spec(z, df, stype, er=[]):
     s = read_spec(df, stype, er)
-    zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide0, z.ide1, z.iid, z.ia, z.iw, z.frej, z.rrej, z.ierr)
+    zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide0, z.ide1, z.iid, z.ia, z.iw, z.ib, z.bf, z.frej, z.rrej, z.ierr, z.fixnd, z.fixld)
     for i in range(len(zm.ds)):
         ws = z.ds[i].ws
         if i < len(ws):
@@ -1195,7 +1269,8 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
-             ddir='data', sdir='spec', ierr=[0.05], sde=3.0):
+             ddir='data', sdir='spec', wreg=[3.0,30.0],
+             ierr=[], sde=3.0, bkgd=([],None)):
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
@@ -1225,7 +1300,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
         di = ion_data(z, ki, nsi, iws, s.elo[0], s.ehi[-1], kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
         ds.append(di)
 
-    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, sde)
+    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, wreg, sde, bkgd)
     return z
 
 def plot_ldist(z, op=0, sav=''):
@@ -1307,31 +1382,60 @@ def plot_ndist(z, op=0, sav=''):
     if sav != '':
         savefig(sav)
 
-def plot_ink(z, i, op=0, col=0, xoffset=0, sav=''):
-    cols = ['k', 'b','g','r','c','m','y']
+def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
+    cols = ['k', 'b','r','g','c','m','y']
     if not op:
         clf()
-    if col < 0:
-        col=i
-    if len(z.ds[i].ns) > 1:
-        errorbar(array(z.ds[i].ns)+0.1+xoffset, z.ds[i].an[:-1], yerr=z.ds[i].ae[:-1], capsize=3, marker='o', color=cols[col%len(cols)])
-    errorbar(z.ds[i].xk-0.1+xoffset, z.ds[i].wk, yerr=z.ds[i].we, capsize=3, marker='o', color=cols[col%len(cols)])
+    if k == 0:
+        k = z.ds[0].k
+    for d in z.ds:
+        if d.k == k:
+            break
+    xn = array(d.ns)+0.1+xoffset
+    xk = d.xk-0.1+xoffset
+    nn = len(xn)
+    nk = len(xk)
+    wn = zeros(nn)
+    wk = zeros(nk)
+    en = zeros(nn)
+    ek = zeros(nk)
+    for d in z.ds:
+        if d.k != k:
+            continue
+        if ws > 0:
+            if d.ws[0]%100 != ws:
+                continue
+        wn[:] += d.an[:-1]*d.an[-1]
+        en[:] += (d.ae[:-1]*d.an[-1])**2# + (d.an[:-1]*d.ae[-1])**2
+        wk[:] += d.wk*d.an[-1]
+        ek[:] += (d.we*d.an[-1])**2# + (d.wk*d.ae[-1])**2
+    swn = sum(wn)
+    swk = sum(wk)
+    wn /= swn
+    wk /= swk
+    en = sqrt(en)/swn
+    ek = sqrt(ek)/swk    
+    if nn > 1 and pn > 0:
+        errorbar(xn, wn, yerr=en, capsize=3, marker='o', color=cols[col%len(cols)])
+    if pn != 2:
+        errorbar(xk, wk, yerr=ek, capsize=3, marker='o', color=cols[col%len(cols)])
     xlabel('N/L')
     ylabel('Fraction')
     if sav != '':
         savefig(sav)
 
 def plot_snk(z, sav='', op=0, xoffset=0):
-    cols = ['k', 'b','g','r','c','m','y']
+    cols = ['k', 'b','r','g','c','m','y']
     if not op:
         clf()
-    for i in range(len(z.ds)):
-        if len(z.ds[i].ns) > 1:
-            errorbar(array(z.ds[i].ns)+0.1+xoffset, z.ds[i].an[:-1], yerr=z.ds[i].ae[:-1], capsize=3, marker='o', color=cols[i%len(cols)])
+    plot_ink(z, k=1, pn=0, op=op)
+    plot_ink(z, k=2, ws=1, col=1, pn=0, op=1)
+    plot_ink(z, k=2, ws=3, col=2, pn=0, op=1)
     labs = ['H-Like', 'He-Like Singlet', 'He-Like Triplet']
-    for i in range(len(z.ds)):
-        errorbar(z.ds[i].xk-0.1+xoffset, z.ds[i].wk, yerr=z.ds[i].we, capsize=3, marker='o', color=cols[i%len(cols)])
     legend(labs)
+    plot_ink(z, k=1, pn=2, op=1)    
+    plot_ink(z, k=2, ws=1, col=1, pn=2, op=1)    
+    plot_ink(z, k=2, ws=3, col=2, pn=2, op=1)
     if sav != '':
         savefig(sav)
     
@@ -1343,10 +1447,14 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
         yd = fm.yc
         ym = z.ym
         ye = sqrt(yd)
+        if z.bf != None:
+            yb = z.bf(fm, z.mpa[z.ib])*fm.eff
     else:
         yd = fm.yd
         ym = z.ym/fm.eff
         ye = fm.ye.copy()
+        if z.bf != None:
+            yb = z.bf(fm, z.mpa[z.ib])
     ye1 = zeros(len(yd))
     if type(z.ierr) == type(0.0):
         ye1 = z.ierr*ym
@@ -1361,9 +1469,13 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
             ymin = max(yd)*ylog
             semilogy(fm.em, ymin+yd)
             semilogy(fm.em, ymin+ym)
+            if z.bf != None:
+                semilogy(fm.em, ymin+yb)
         else:
             plot(fm.em, yd)
             plot(fm.em, ym)
+            if z.bf != None:
+                plot(fm.em, yb)
         ylabel('Intensity')
     else:
         r = yd-ym
@@ -1507,12 +1619,12 @@ def avg_tnk(z, k=0, ws=0, m=0.25):
     return (r,s)
 
 def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
-             k=0, md=0, sav='', ws=0):
+             k=0, md=0, sav='', ws=0, col=0, lab=1):
     if not op:
         clf()
     if k == 0:
         k = z.ds[0].k
-    cols = ['k', 'b','g','r','c','m','y']
+    cols = ['k', 'b','r','g','c','m','y']
     if md == 0:
         r,s = sum_tnk(z, k, ws)
     else:
@@ -1527,19 +1639,44 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     trs = sum(tr)
     pn1 = min(pn1, n+1)
     idx = range(pn0-1,pn1)
-    errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[0])
+    if pn1 > pn0:
+        errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[col])
     labs = ['N-dist']
     for i in range(nmin, nmax+1):
         km = min(kmax+1, i)
-        errorbar(xk[:km], y[i-1][:km], yerr=ye[i-1][:km], capsize=3, marker='o', color=cols[1+(i-nmin)%(len(cols)-1)])
+        errorbar(xk[:km], y[i-1][:km], yerr=ye[i-1][:km], capsize=3, marker='o', color=cols[col+1+(i-nmin)%(len(cols)-1)])
         labs.append('L-dist N=%d'%i)
-    legend(labs)
+    if lab > 0:
+        legend(labs)
     xlabel('N/L')
     ylabel('Fraction')
+        
     if sav != '':
         savefig(sav)
     
-def plot_icx(z, op=0, sav='', k=0, xr=[110, 670], yr=[1e-3, 0.25]):
+def plot_rnk(z, sav='', op=0):
+    i = argmax(z.ds[0].an[:-1])
+    nm = z.ds[0].ns[i]
+    n0 = z.ds[0].ns[0]
+    n1 = z.ds[0].ns[-1]
+    if n1 > n0:
+        lab=['N-dist','L-dist H-like',
+             'L-dist He-like Singlet','L-dist He-like Triplet']
+        i0 = 0
+    else:
+        lab = ['H-like', 'He-like Singlet', 'He-like Triplet']
+        i0 = -1
+    plot_tnk(z, k=1, nmin=nm, nmax=nm, kmax=z.ds[0].kmax,
+             pn0=n0, pn1=n1, lab=0, col=i0, op=op)
+    plot_tnk(z, k=2, nmin=nm, nmax=nm, kmax=z.ds[1].kmax,
+             pn0=n0, pn1=0, lab=0, col=i0+1, op=1, ws=1)
+    plot_tnk(z, k=2, nmin=nm, nmax=nm, kmax=z.ds[1].kmax,
+             pn0=n0, pn1=0, lab=0, col=i0+2, op=1, ws=3)
+    legend(lab)
+    if sav != '':
+        savefig(sav)
+        
+def plot_icx(z, op=0, sav='', k=0, ws=0, xr=[110, 670], yr=[1e-3, 0.5]):
     if not op:
         clf()
     if k == 0:
@@ -1553,11 +1690,11 @@ def plot_icx(z, op=0, sav='', k=0, xr=[110, 670], yr=[1e-3, 0.25]):
         if d1.k == k:
             nmin = min(min(d1.ns),nmin)
             nmax = max(max(d1.ns),nmax)
-    cols = ['k', 'b','g','r','c','m','y']
-    c0,e0,tc = sel_icx(z, 0, k)
+    cols = ['k', 'b','r','g','c','m','y']
+    c0,e0,tc = sel_icx(z, 0, k, ws)
     if d.k == 10:
-        c1,e1,tc = sel_icx(z, 1, k)
-        c2,e2,tc = sel_icx(z, 2, k)
+        c1,e1,tc = sel_icx(z, 1, k, ws)
+        c2,e2,tc = sel_icx(z, 2, k, ws)
     xlim(xr[0], xr[1])
     ylim(yr[0], yr[1])
     semilogy(c0+1e-8, color=cols[0])
@@ -1597,7 +1734,12 @@ def plot_icx(z, op=0, sav='', k=0, xr=[110, 670], yr=[1e-3, 0.25]):
             ns = '%s J=%d/2'%(d.rd.n[w[i]][ip:-5], d.rd.j[w[i]])            
         text(w[i], 1.15*c0[w[i]], ns, horizontalalignment='center')
     xlabel('Level Index')
-    ylabel('Relative Cross Section')
+    if ws == 1:
+        ylabel('Singlets Relative Cross Section')
+    elif ws == 3:
+        ylabel('Triplets Relative Cross Section')
+    else:
+        ylabel('Relative Cross Section')
     if sav != '':
         savefig(sav)
 
