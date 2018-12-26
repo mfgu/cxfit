@@ -1409,11 +1409,14 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
         elif ws > 0:
             if d.ws[0]%100 != ws:
                 continue
-        ta = d.anr[-1]*sum(d.wk)
-        wn[:] += d.anr[:-1]*ta
-        en[:] += (d.ae[:-1]*ta)**2
-        wk[:] += d.wk*d.anr[-1]
-        ek[:] += (d.we*d.anr[-1])**2
+        for i in range(nn):
+            ta = sum(sum(d.ad[i],axis=1)*d.wk)*d.anr[-1]
+            wn[i] += d.anr[i]*ta
+            en[i] += (d.ae[i]*ta)**2
+        for i in range(nk):
+            ta = sum(sum(d.ad[:,i,:], axis=1)*d.anr[:-1])*d.anr[-1]
+            wk[i] += d.wk[i]*ta
+            ek[i] += (d.we[i]*ta)**2
     swn = sum(wn)
     swk = sum(wk)
     wn /= swn
