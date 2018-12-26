@@ -1409,10 +1409,11 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
         elif ws > 0:
             if d.ws[0]%100 != ws:
                 continue
-        wn[:] += d.an[:-1]*d.an[-1]
-        en[:] += (d.ae[:-1]*d.an[-1])**2# + (d.an[:-1]*d.ae[-1])**2
-        wk[:] += d.wk*d.an[-1]
-        ek[:] += (d.we*d.an[-1])**2# + (d.wk*d.ae[-1])**2
+        ta = d.anr[-1]*sum(d.wk)
+        wn[:] += d.anr[:-1]*ta
+        en[:] += (d.ae[:-1]*ta)**2
+        wk[:] += d.wk*d.anr[-1]
+        ek[:] += (d.we*d.anr[-1])**2
     swn = sum(wn)
     swk = sum(wk)
     wn /= swn
@@ -1529,7 +1530,10 @@ def sum_tcx(z, k=0, ws=0):
     for d in z.ds:
         if d.k != k:
             continue
-        if ws > 0:
+        if ws >= 100:
+            if d.ws[0] != ws:
+                continue
+        elif ws > 0:
             if d.ws[0]%100 != ws:
                 continue
         ci, ei = sum_cx(d)
