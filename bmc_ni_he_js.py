@@ -10,4 +10,5 @@ z=cxfit.fit_spec((fn,ft), 28, ks, ns, js, [1.8], 5e-4, 3,
                  sdir='spec',
                  kmax=7,
                  wsig=[(1.7,1.9)],
+                 fixnd=[-1,0,-1,2,-1,4,-1,6,-1,8],
                  sav=['znij_he.pkl',500])

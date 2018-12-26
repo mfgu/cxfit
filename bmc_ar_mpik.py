@@ -1,4 +1,5 @@
 import cxfit
+import pickle
 
 fn = 'Ar_CX_6keV_Raw.dat'
 ns1 = [9]

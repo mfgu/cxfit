@@ -534,7 +534,7 @@ def ar_bkgd(s, p):
 
 def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
               wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='',
-              yb=1e-2, ecf='', ierr=[], wreg=[3.0, 30.0],
+              yb=1e-2, ecf='', ierr=[], wreg=10.0,
               sde=3.0, bkgd=([],None)):
     t0 = time.time()
     yd = sp.yc + yb
@@ -870,7 +870,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
     def lnlikely(ip):
         r = ilnlikely(ip)
         r = sum(r)
-        if len(wreg) == 0:
+        if wreg <= 0:
             return r
         
         for i in range(ni):
@@ -889,13 +889,14 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
                     if wk[j] > 0 and wk[j-1]/wk[j] < wk0[j-1]/wk0[j]:
                         break
                 if j > im:
-                    dr = min(30.0, (j-im)*wreg[0])
-                    dr = exp(dr)
-                    r -= dr
-                if wk[-1] > wk0[-1]:
-                    dr = min(30.0, (wk[-1]-wk0[-1])*wreg[1])
-                    dr = exp(dr)
-                    r -= dr
+                    xj = j/im-1.0
+                    dr = xj*wreg
+                    r -= dr*dr
+                    j0 = max(1, j-1)
+                    for j in range(j0, nk):
+                        if wk[j] > wk0[j]:
+                            dr = xj*(wk[j]-wk0[j])*wreg
+                            r -= dr*dr
         return r
 
     def eqanorm(x, ii):
@@ -1269,7 +1270,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
-             ddir='data', sdir='spec', wreg=[3.0,30.0],
+             ddir='data', sdir='spec', wreg=10.0,
              ierr=[], sde=3.0, bkgd=([],None)):
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
@@ -1402,7 +1403,10 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
     for d in z.ds:
         if d.k != k:
             continue
-        if ws > 0:
+        if ws >= 100:
+            if d.ws[0] != ws:
+                continue
+        elif ws > 0:
             if d.ws[0]%100 != ws:
                 continue
         wn[:] += d.an[:-1]*d.an[-1]
