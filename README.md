@@ -8,7 +8,7 @@ python d.py --z=16 --k=2 #for He-like S
 
 2. prepare cascade model:  
 python bs.py 16 1 4 12 0 #for H-like S  
-python bs.py 16 2 4 12 1 #for He-like S, split singlet and triplet states  
+python bs.py 16 2 4 12 2 #for He-like S, split singlet and triplet states with CI
 
 3. run the fit  
 for the LLNL XRS data of S + He CX. it needs the transmission corrected flux data file  

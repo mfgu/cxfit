@@ -9,15 +9,124 @@ from pfac import crm
 import pickle
 import time
 
+"""cxfit uses MCMC algorithm to fit the charge exchange X-ray spectra to derive n/l distribution of the capture cross sections
+"""
+
 RadCas = namedtuple('RadCas', ['rd', 'r', 'ir0', 'ir1', 'egy', 'wa', 'ai', 'trm', 'tri', 'z', 'k', 'ide', 'de', 'im', 'nt', 'im1', 'na'])
+"""RadCas contains the radiative cascade model. it is not used in the fit directly, but can be used to examine the cascade spectra of individual captures
+rd: the FAC energy level obj read in via pfac.rfac.read_en()
+r: the radiative transition rates read in from *.r1 file dumped from fac.crm.DumpRate
+ir0: lower level indices of the lines
+ir1: upper level indices of the lines
+egy: energy of the lines
+wa: level indices of the capture states
+ai: cascade matrix. ai[i,j] is the intensity of the i-th line from the capture into wa[j] state.
+trm: transition rate matrix. trm[i,j] = -A_{i,j} if i<j, trm[i,i]=sum_i(A_{i,j})
+tri: inverse of trm
+z: atomic number
+k: number of electrons
+ide,de: optional energy corrections to the lines
+im: total number of levels
+nt: number of lines
+im1: im-1
+na: number of capture states, len(wa)
+"""
+
 SpecData = namedtuple('SpecData', ['fns', 'stype', 'er', 'elo', 'ehi', 'em', 'yc', 'yd', 'eff', 'ye'])
+"""Spectra Data structure
+fns: file name the data is read from
+stype: type of the data file
+er: energy range
+elo: low edge of the energy grid
+ehi: high edge of the energy grid
+em: mid of the energy bin
+yc: counts per bin
+yd: transmission corrected count
+eff: transmission coefficients
+ye: uncertainty on yd
+"""
+
 Response = namedtuple('Response', ['sig', 'bn', 'ar', 'aj'])
+"""Spectral response function
+sig: response function parameters. List of up to 5 elements.
+     sig[0] the standard deviation of the Gaussian profile
+     sig[-1] is the energy dependence of the width. sigma=sig[0]*sqrt(1+sig[-1]*(e-em[0])/1e3)
+     len(sig)>2, the response function is a mixture of a Gaussian and a Compton scattering wing.
+     R(x) = (G(x) + S(x)*sig[2])/(1+sig[2])
+     S(x) = bn*exp(x*sig[1])*erfc((x+sig[1])/sqrt(2)*sig[3])
+     where x = (e-e0)/sigma
+bn:  normalization constant of the S(x) function above.
+ar:  ar[:,j] is the response of j-th line, R((e-egy[j])
+aj:  response of capture n/l distribution. aj[n,:,l] is the spectra of capture to n/l orbital
+"""
+
 IonData = namedtuple('IonData', ['ddir', 'sdir', 'ps0', 'ds0', 'rd', 'r', 'ir0', 'ir1', 'idx', 'egy', 'ai', 'ad', 'zai',
                                  'z', 'k', 'ns', 'nm', 'kmin', 'kmax', 'an', 'ae', 'anr', 'wk0',
                                  'wk', 'we', 'swk', 'swe', 'xk',
                                  'ide', 'de', 'ws', 'emin', 'emax'])
+"""Ion radiative cascade data container
+ddir: data directory containing the FAC atomic data
+sdir: spectral directory containing the cascade mode from the crm run
+ps0: file prefix of the spectral model files
+ds0: file prefix of the FAC data files
+rd: the FAC energy level obj read in via pfac.rfac.read_en()
+r: the radiative transition rates read in from *.r1 file dumped from fac.crm.DumpRate
+ir0: lower level indices of the lines
+ir1: upper level indices of the lines
+idx: idx[i,j] is the index of the j->i transition in the r array.
+egy: energy of the lines
+ai: ai[n,i,l] is the intensity of i-th line for capture in to n/l orbital
+ad: ad[n,l,i] is the capture cross section into i-th state for a n/l capture
+zai: zai[l]=1 means a capture to l orbital does not result in any line for this ion and ws
+z: atomic number
+k: number of electrons
+ns: n-array of the capture
+nm: number of l orbitals
+kmin: minimum l
+kmax: maximum l
+an: n-distribution, accounting for wk normalization
+ae: error in n-distribution
+anr: raw n-distribution
+wk0: theoretical low-energy l-distribution
+wk: l-distribution
+we: error in l-distribution
+swk: not used
+swe: not used
+xk: l-array
+ide: index of lines need energy correction
+de: energy correction of lines
+ws: 2J+1/2S+1 of the ion for spin/j split
+emin: minimum energy of the lines
+emax: maximum energy of the lines
+"""
+
 FitMCMC = namedtuple('FitMCMC', ['imp', 'sp', 'ym', 'mpa', 'mpe', 'ra', 'ds', 'rs', 'ap', 'hmp', 'ene','nde','ide0','ide1','iid', 'ia','iw','ib','bf','frej','rrej', 'ierr', 'fixnd', 'fixld'])
-    
+"""Results of MCMC fit to the cx spectra
+imp: number mcmc iterations
+sp: spectral data
+ym: fitted spectrum
+mpa: average parameters
+mpe: standard deviation of parameters
+ra: log of likelyhood in the last iteration
+ds: IonData array for included ions
+rs: response function for each ion
+ap: ap[i,:,l] is the model spetra of i-th ion with capture into l orbital
+hmp: hmp[i,:] is the parameter of the i-th iteration
+ene: ene[i] is the log of likelyhood of the i-th iteration
+nde: number of lines needs energy correction
+ide0,ide1: ide0[i]:ide1[i] is the parameter index of the energy correction of i-th ion
+iid: parameter index of the total ion normalizaiton
+ia: ia[i]:ia[i+1] is the parameter index of the n-dist parameters of the i-th ion
+iw: iw[i]:iw[i+1] is the parameter index of the l-dist parameters of the i-th ion
+ib: parameter index of the background parameters.
+bf: background function
+frej: reject probability scal factor
+rrej: reject probability array
+ierr: (iea,iy) iea is the theoretical error of the model spectra, iy is the resulting errors on the counts
+fixnd: flags to fix n-dist of any ion
+fixld: flags to fix l-dist of any ion
+"""
+
 def rcs(f):
     r = loadtxt(f)
     if len(r) > 0:
@@ -26,6 +135,17 @@ def rcs(f):
         return r
 
 def rad_cas(z, k, emin, emax, nmin=0, nmax=100, ist='', ddir='data', sdir='spec'):
+    """calcualte the radiative cascade spectra
+    z: atomic number
+    k: number of electron
+    emin: min line energy
+    emax: max line energy
+    nmin: min n of capture
+    nmax; max n of capture
+    ist: initial state
+    ddir: FAC data directory
+    sdir: crm data directory
+    """
     a = fac.ATOMICSYMBOL[z]
     ps0 = '%s/%s%02d'%(sdir, a, k)
     ds0 = '%s/%s%02d'%(ddir, a, k)
@@ -80,6 +200,17 @@ def rad_cas(z, k, emin, emax, nmin=0, nmax=100, ist='', ddir='data', sdir='spec'
     return RadCas(rd, r, ir0, ir1, egy, wa, ai, trm, tri, z, k, ide, de, im, nt, im1, na)
 
 def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-1):
+    """cascade data
+    z: atomic number
+    k: number of electrons
+    ws0: 2J+1/2S+1 of j/s split
+    emin: min line energy
+    emax: max line energy
+    ddir: FAC data directory
+    sdir: crm data direcotry
+    kmin: min l
+    kmax: max l
+    """
     a = fac.ATOMICSYMBOL[z]
     ps0 = '%s/%s%02d'%(sdir, a, k)
     ws0 = atleast_1d(array(ws0))
@@ -1272,6 +1403,37 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
              ddir='data', sdir='spec', wreg=10.0,
              ierr=[], sde=3.0, bkgd=([],None)):
+    """driver for mcmc fit of cx spectra
+    df: spectral data file
+    z: atomic number
+    ks: array of number of electrons
+    ns: array of number of n
+    ws: array of number of 2J+1/2S+1
+    sig: parameters of response function
+    eth: intensity threshold for liens need energy correction
+    stype: spectral data type
+    er: energy range of the fit
+    nmc: number of mcmc iterations
+    fixld: flags to fix l-dist
+    fixnd: flags to fix n-dist
+    racc: desired acceptance probability
+    kmin: min l
+    kmax: max l
+    wb: min/max l-dist
+    wsig: min/max of response params
+    sav: (fn,niter) save the FitMCMC result in fn every niter iteration
+    mps: continue the mcmc with pervious parameters
+    nburn: burn-in iterations
+    nopt,sopt,fopt: perform a non-linear-square fit periodically.
+    yb: add a small background to the spectra just to avoid 0 count
+    ecf: energy correction file
+    ddir: FAC data direcotry
+    sdir: crm data directory
+    wreg: regularization parameter for high l capture
+    ierr: theoretical model error
+    sde: min/max energy corrections
+    bkgd: include a background term in the fit model    
+    """
     s = read_spec(df, stype, er)
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
@@ -1335,10 +1497,21 @@ def plot_ldist(z, op=0, sav=''):
 def plot_idist(z, op=0, sav=''):
     if not op:
         clf()
-    x0 = arange(len(z.ds))
-    y0 = z.mpa[z.iid]/sum(z.mpa[z.iid])
-    e0 = z.mpe[z.iid]/sum(z.mpa[z.iid])
-
+    ni = len(z.ds)
+    x0 = arange(ni)
+    y0 = zeros(ni)
+    e0 = zeros(ni)
+    for k in range(ni):
+        d = z.ds[k]
+        nn = len(d.ns)
+        for i in range(nn):
+            ta = sum(sum(d.ad[i], axis=1)*d.wk)*d.anr[-1]
+            y0[k] += d.anr[i]*ta
+            e0[k] += (d.ae[i]*ta)**2
+    e0 = sqrt(e0)
+    ys = sum(y0)
+    y0 /= ys
+    e0 /= ys
     ymin = min(y0-e0)
     ymax = max(y0+e0)
     dy = 0.025*(ymax-ymin)
@@ -1404,8 +1577,12 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
         if d.k != k:
             continue
         if ws >= 100:
-            if d.ws[0] != ws:
-                continue
+            if ws%100 > 0:
+                if d.ws[0] != ws:
+                    continue
+            else:
+                if d.ws[0]/100 != ws/100:
+                    continue
         elif ws > 0:
             if d.ws[0]%100 != ws:
                 continue
@@ -1534,8 +1711,12 @@ def sum_tcx(z, k=0, ws=0):
         if d.k != k:
             continue
         if ws >= 100:
-            if d.ws[0] != ws:
-                continue
+            if ws%100 > 0:
+                if d.ws[0] != ws:
+                    continue
+            else:
+                if d.ws[0]/100 != ws/100:
+                    continue
         elif ws > 0:
             if d.ws[0]%100 != ws:
                 continue
