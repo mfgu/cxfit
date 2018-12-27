@@ -256,6 +256,9 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
     nm = int(mean(ns))
     if kmax < 0:
         kmax = nm-1
+    nmax = max(ns)
+    if kmax > nmax-1:
+        kmax = nmax-1
     nm = kmax-kmin+1
     xk = arange(nm)+kmin
     ai = zeros((nn, nt, nm))
@@ -1556,19 +1559,14 @@ def plot_ndist(z, op=0, sav=''):
     if sav != '':
         savefig(sav)
 
-def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
-    cols = ['k', 'b','r','g','c','m','y']
-    if not op:
-        clf()
+def sum_wnk(z, k=0, ws=0):
     if k == 0:
         k = z.ds[0].k
     for d in z.ds:
         if d.k == k:
             break
-    xn = array(d.ns)+0.1+xoffset
-    xk = d.xk-0.1+xoffset
-    nn = len(xn)
-    nk = len(xk)
+    nn = len(d.ns)
+    nk = len(d.xk)
     wn = zeros(nn)
     wk = zeros(nk)
     en = zeros(nn)
@@ -1587,19 +1585,72 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
             if d.ws[0]%100 != ws:
                 continue
         for i in range(nn):
-            ta = sum(sum(d.ad[i],axis=1)*d.wk)*d.anr[-1]
-            wn[i] += d.anr[i]*ta
-            en[i] += (d.ae[i]*ta)**2
+            ta = sum(sum(d.ad[i],axis=1)*d.wk)
+            ra = ta*d.anr[-1]
+            wn[i] += d.anr[i]*ra
+            en[i] += (d.ae[i]*ra)**2 + (d.anr[i]*ta*d.ae[-1])**2
         for i in range(nk):
-            ta = sum(sum(d.ad[:,i,:], axis=1)*d.anr[:-1])*d.anr[-1]
+            ra = sum(d.ad[:,i,:],axis=1)
+            sa = sum(ra*d.anr[:-1])
+            ta = sa*d.anr[-1]
             wk[i] += d.wk[i]*ta
-            ek[i] += (d.we[i]*ta)**2
+            ek[i] += (d.we[i]*ta)**2 + (d.wk[i]*sa*d.ae[-1])**2+ sum(((d.wk[i]*d.anr[-1]*ra)**2)*d.ae[:-1]**2)
     swn = sum(wn)
     swk = sum(wk)
     wn /= swn
     wk /= swk
     en = sqrt(en)/swn
-    ek = sqrt(ek)/swk    
+    ek = sqrt(ek)/swk
+    return (wn, en, wk, ek)
+    
+def avg_wnk(z, k=0, ws=0, m=0.25):
+    if m < 1:
+        m0 = int32(z.imp*m)
+    else:
+        m0 = int32(m)
+    if k == 0:
+        k = z.ds[0].k
+    for d in z.ds:
+        if d.k == k:
+            break
+    nn = len(d.ns)
+    nk = len(d.xk)
+    wn = zeros(nn)
+    wk = zeros(nk)
+    en = zeros(nn)
+    ek = zeros(nk)
+    for j in range(z.imp-m0, z.imp):
+        mcmc_cmp(z, j)
+        (iwn, ien, iwk, iek) = sum_wnk(z, k, ws)
+        wn += iwn
+        en += iwn*iwn
+        wk += iwk
+        ek += iwk*iwk
+    wn /= m0
+    wk /= m0
+    en /= m0
+    ek /= m0
+    en = sqrt(en - wn*wn)
+    ek = sqrt(ek - wk*wk)
+    return (wn, en, wk, ek)
+    
+def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav='', m=0):
+    cols = ['k', 'b','r','g','c','m','y']
+    if not op:
+        clf()
+    if k == 0:
+        k = z.ds[0].k
+    for d in z.ds:
+        if d.k == k:
+            break
+    if m <= 0:
+        (wn, en, wk, ek) = sum_wnk(z, k, ws)
+    else:
+        (wn, en, wk, ek) = avg_wnk(z, k, ws, m)
+    xn = array(d.ns)+0.1+xoffset
+    xk = d.xk-0.1+xoffset
+    nn = len(d.ns)
+    nk = len(d.xk)
     if nn > 1 and pn > 0:
         errorbar(xn, wn, yerr=en, capsize=3, marker='o', color=cols[col%len(cols)])
     if pn != 2:
@@ -1609,18 +1660,18 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav=''):
     if sav != '':
         savefig(sav)
 
-def plot_snk(z, sav='', op=0, xoffset=0):
+def plot_snk(z, sav='', op=0, xoffset=0, m=0):
     cols = ['k', 'b','r','g','c','m','y']
     if not op:
         clf()
-    plot_ink(z, k=1, pn=0, op=op)
-    plot_ink(z, k=2, ws=1, col=1, pn=0, op=1)
-    plot_ink(z, k=2, ws=3, col=2, pn=0, op=1)
+    plot_ink(z, k=1, pn=0, op=op, m=m)
+    plot_ink(z, k=2, ws=1, col=1, pn=0, op=1, m=m)
+    plot_ink(z, k=2, ws=3, col=2, pn=0, op=1, m=m)
     labs = ['H-Like', 'He-Like Singlet', 'He-Like Triplet']
     legend(labs)
-    plot_ink(z, k=1, pn=2, op=1)    
-    plot_ink(z, k=2, ws=1, col=1, pn=2, op=1)    
-    plot_ink(z, k=2, ws=3, col=2, pn=2, op=1)
+    plot_ink(z, k=1, pn=2, op=1, m=m)    
+    plot_ink(z, k=2, ws=1, col=1, pn=2, op=1, m=m)    
+    plot_ink(z, k=2, ws=3, col=2, pn=2, op=1, m=m)
     if sav != '':
         savefig(sav)
     
@@ -1817,10 +1868,10 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     if k == 0:
         k = z.ds[0].k
     cols = ['k', 'b','r','g','c','m','y']
-    if md == 0:
+    if md <= 0:
         r,s = sum_tnk(z, k, ws)
     else:
-        r,s = avg_tnk(z, k, ws)
+        r,s = avg_tnk(z, k, ws, md)
     tr = sum(r, axis=1)
     ts = sqrt(sum(s, axis=1))
     n = len(r[0])
