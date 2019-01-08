@@ -21,6 +21,7 @@ ap.add_option('--eu', dest='eu', type='int', default=0, help='ion energy unit')
 ap.add_option('--scrm', dest='scrm', type='string', default='', help='scrm conversion')
 ap.add_option('--dk', dest='dk', type='int', default=0, help='zeff adjust')
 ap.add_option('--sdir', dest='sdir', type='string', default='spec', help='spec out dir')
+ap.add_option('--exc', dest='exc', type='int', default=0, help='do collisional excitation model')
 
 (opts, args) = ap.parse_args()
 print(opts)
@@ -40,6 +41,8 @@ ps = '%s/%s'%(opts.sdir,p)
 z1 = z-k+1+opts.dk
 a1 = fac.ATOMICSYMBOL[z1]
 md = 0
+if opts.exc > 0 and md < 100:
+    md = 100
 if (abs(opts.md) >= 100):
     md = opts.md
 elif (opts.md == 2):
@@ -60,14 +63,24 @@ SetOption('crm:sw_mode', opts.swm)
 
 WallTime('addion')
 AddIon(k, 0.0, pd+'b')
-SetBlocks(1.0)
-if opts.em > 0:
-    if opts.em == 1:
-        SetCxtDist(1, opts.e, min(0.01*opts.e,opts.de), -1, -1)
+if opts.exc > 0:
+    SetBlocks(-1)
+    if opts.em > 0:
+        if opts.em == 1:
+            SetEleDist(1, opts.e, min(0.01*opts.e,opts.de), -1, -1)
+        else:
+            SetEleDist(7, opts.e, min(0.01*opts.e,opts.de), -1, -1)
     else:
-        SetCxtDist(7, opts.e, min(0.01*opts.e,opts.de), -1, -1)
+        SetEleDist(0, opts.e, -1, -1)
 else:
-    SetCxtDist(0, opts.e, -1, -1)
+    SetBlocks(1.0)
+    if opts.em > 0:
+        if opts.em == 1:
+            SetCxtDist(1, opts.e, min(0.01*opts.e,opts.de), -1, -1)
+        else:
+            SetCxtDist(7, opts.e, min(0.01*opts.e,opts.de), -1, -1)
+    else:
+        SetCxtDist(0, opts.e, -1, -1)
 WallTime('tr')
 SetTRRates(0)
 if k == 10:
@@ -104,13 +117,21 @@ for kk in range(kk0, kk1+1):
         else:
             md = -(sw*10000 + nn*100+kk)
             ps = '%sm%02dk%02d'%(ps0, sw*100+nn, kk)
-    SetCXRates(md, opts.tgt)
-    SetCxtDensity(1e-5)
+    if opts.exc == 0:
+        SetCXRates(md, opts.tgt)
+        SetCxtDensity(1e-5)
+    else:
+        SetCERates(1)
+        SetAbund(k, 1.0)
+        SetEleDensity(1.0)
     WallTime('pop')
     InitBlocks()
     DumpRates(ps+'a.rm', 0, 0, -1, 1)
     DumpRates(ps0+'a.r1', k, 1, -1, 1)
-    DumpRates(ps+'a.r7', k, 7, -1, 1)
+    if opts.exc == 0:
+        DumpRates(ps+'a.r7', k, 7, -1, 1)
+    else:
+        DumpRates(ps+'a.r3', k, 3, -1, 1)
     SetIteration(1e-5, 0.5)
     LevelPopulation()
     

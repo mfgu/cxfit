@@ -32,7 +32,7 @@ im1: im-1
 na: number of capture states, len(wa)
 """
 
-SpecData = namedtuple('SpecData', ['fns', 'stype', 'er', 'elo', 'ehi', 'em', 'yc', 'yd', 'eff', 'ye'])
+SpecData = namedtuple('SpecData', ['fns', 'stype', 'er', 'elo', 'ehi', 'em', 'yc', 'yd', 'eff', 'ye', 'xm'])
 """Spectra Data structure
 fns: file name the data is read from
 stype: type of the data file
@@ -46,7 +46,7 @@ eff: transmission coefficients
 ye: uncertainty on yd
 """
 
-Response = namedtuple('Response', ['sig', 'bn', 'ar', 'aj'])
+Response = namedtuple('Response', ['sig', 'es', 'bn', 'ar', 'aj'])
 """Spectral response function
 sig: response function parameters. List of up to 5 elements.
      sig[0] the standard deviation of the Gaussian profile
@@ -55,6 +55,7 @@ sig: response function parameters. List of up to 5 elements.
      R(x) = (G(x) + S(x)*sig[2])/(1+sig[2])
      S(x) = bn*exp(x*sig[1])*erfc((x+sig[1])/sqrt(2)*sig[3])
      where x = (e-e0)/sigma
+es:  energy scale calibration, x = es[1] + es[2]*(e-es[0]) + es[3]*(e-es[0])**2 + ...
 bn:  normalization constant of the S(x) function above.
 ar:  ar[:,j] is the response of j-th line, R((e-egy[j])
 aj:  response of capture n/l distribution. aj[n,:,l] is the spectra of capture to n/l orbital
@@ -128,9 +129,9 @@ fixld: flags to fix l-dist of any ion
 """
 
 def rcs(f):
-    r = loadtxt(f)
+    r = loadtxt(f,ndmin=2)
     if len(r) > 0:
-        return transpose(loadtxt(f))
+        return transpose(r)
     else:
         return r
 
@@ -259,6 +260,9 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
     nmax = max(ns)
     if kmax > nmax-1:
         kmax = nmax-1
+    if nn == 1 and ns[0] == 0:
+        kmin = 0
+        kmax = 0
     nm = kmax-kmin+1
     xk = arange(nm)+kmin
     ai = zeros((nn, nt, nm))
@@ -274,11 +278,14 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
         for i in range(nn):
             n = ns[i]
             for kk in range(kmin, kmax+1):
-                if kk >= n:
+                if n > 0 and kk >= n:
                     continue
                 ki = kk-kmin
                 if k > 0:
-                    ps = '%s%s%02dk%02d'%(ps0, nc, (ws*100+n), kk)
+                    if n == 0:
+                        ps = ps0
+                    else:
+                        ps = '%s%s%02dk%02d'%(ps0, nc, (ws*100+n), kk)
                     ofn = ps + 'a.ln'
                     d = rcs(ofn)
                     if len(d) == 0:
@@ -286,7 +293,10 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
                         continue
                     it0 = atleast_1d(int32(d[1]))
                     it1 = atleast_1d(int32(d[2]))
-                    ofn = ps + 'a.r7'
+                    if n == 0:
+                        ofn = ps + 'a.r3'
+                    else:
+                        ofn = ps + 'a.r7'
                     c = rcs(ofn)
                     ic0 = atleast_1d(int32(c[0]))
                     ic1 = atleast_1d(int32(c[1]))
@@ -354,7 +364,39 @@ def convolve(e, s, sig, emin=-1, emax=-1, nde=3):
             y[w] += wf[w]*s[i]*exp(-0.5*x[w]*x[w])
     return SpecData('', -1, [emin,emax], elo, ehi, em, y, None, None, None)
 
-def response(d, s, sig):
+def calib_c2e(x, es):
+    nes = len(es)
+    if nes < 3:
+        return x
+    
+    xe = x-es[1]
+    if nes >= 3:
+        x = es[0] + xe/es[2]
+        if nes > 3:
+            for iter in range(5):
+                xp = x-es[0]
+                xep = xp.copy()
+                xeq = xe.copy()
+                for i in range(3,nes):
+                    xep *= xp
+                    xeq -= es[i]*xep
+                x = es[0] + xeq/es[2]
+    return x
+
+def calib_e2c(egy, es):
+    nes = len(es)
+    if nes < 3:
+        return egy
+    xe = egy-es[0]
+    egy = es[1] + es[2]*xe
+    if nes > 3:
+        xep = xe.copy()
+        for i in range(3, nes):
+            xep *= xe
+            egy += es[i]*xep
+    return egy
+
+def response(d, s, sig, es=[]):
     elo = s.elo
     ehi = s.ehi
     em = 0.5*(elo+ehi)
@@ -398,6 +440,10 @@ def response(d, s, sig):
     emid = em[0]
     #emid = mean(em)
     erng = 1e3
+    nes = len(es)
+    if nes > 2:
+        erng = calib_e2c(emid+erng, es)-calib_e2c(emid, es)
+        egy = calib_e2c(egy, es)
     for i in range(nt):        
         e = egy[i]        
         if ns == 2 or ns == 5:
@@ -422,15 +468,19 @@ def response(d, s, sig):
     aj = zeros((nn,nr,nm))
     for i in range(nn):
         aj[i] = matmul(ar, d.ai[i])
-    return Response(sig, bn, ar, aj)
+    return Response(sig, es, bn, ar, aj)
 
 def calc_spec(d, r, ar=None):
+    if type(r) == type(0):
+        y,ar = calc_spec(d.ds[r], d.rs[r], ar)
+        y *= d.sp.eff
+        return (y,ar)
     n = len(d.ns)
     if ar == None:
         ar = 0.0
         for i in range(n):
             ar += d.anr[n]*d.anr[i]*r.aj[i]
-    y = matmul(ar, d.wk)    
+    y = matmul(ar, d.wk)
     return (y,ar)
 
 def scale_spec(yd0, ye):
@@ -447,7 +497,6 @@ def scale_spec(yd0, ye):
 def mcmc_cmp(z, m):
     np = len(z.mpa)
     ni = len(z.ds)
-    nsig = len(z.rs[0].sig)
     ia = z.ia
     iw = z.iw
     iid = z.iid
@@ -471,6 +520,10 @@ def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
     np = len(z.mpa)
     ni = len(z.ds)
     nsig = len(z.rs[0].sig)
+    es = z.rs[0].es.copy()
+    nes = len(es)-1
+    if nes < 2:
+        nes = 0
     ia = z.ia
     iw = z.iw
     iid = z.iid
@@ -513,8 +566,11 @@ def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
         z.ds[ii].an[:-1] /= xw
         z.ds[ii].an[-1] = z.ds[ii].anr[-1]*xw
     z.ym[:] = 0.0
+    z.sp.xm[:] = calib_c2e(z.sp.em, z.rs[0].es)
+    if nes > 0:
+        es[1:] = z.mpa[nsig:nsig+nes]
     for ii in range(ni):
-        z.rs[ii] = response(z.ds[ii], z.sp, z.mpa[:nsig])
+        z.rs[ii] = response(z.ds[ii], z.sp, z.mpa[:nsig], es)
         (y,r) = calc_spec(z.ds[ii], z.rs[ii])
         z.ym[:] += z.sp.eff*y
     if len(z.ib) > 0:
@@ -595,7 +651,7 @@ def read_spec(df, stype, er=[]):
             
     if stype < 3:
         (yc,eff) = scale_spec(yd, ye)
-    return SpecData(df, stype, er, elo, ehi, 0.5*(elo+ehi), yc, yd, eff, ye)
+    return SpecData(df, stype, er, elo, ehi, 0.5*(elo+ehi), yc, yd, eff, ye, 0.5*(elo+ehi))
 
 def load_ecf(ds, ecf):
     for d in ds:
@@ -666,7 +722,7 @@ def ar_bkgd(s, p):
         y[w] = p[0]*de[w]/(1+exp(x[w]))
     return y
 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wb=[],
               wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='',
               yb=1e-2, ecf='', ierr=[], wreg=10.0,
               sde=3.0, bkgd=([],None)):
@@ -702,6 +758,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
     load_ecf(ds, ecf)
     k0 = 1000
     k1 = 0
+    emin = calib_c2e(elo[0], es)
+    emax = calib_c2e(ehi[-1], es)
     for ii in range(len(ds)):
         d = ds[ii]
         if d.k > 0:
@@ -725,7 +783,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
         ia.append(na)
         iw.append(nw)
         si = sum(sum(d.ai,axis=0),axis=1)
-        w = where(logical_and(d.egy > elo[0], d.egy < ehi[-1]))
+        w = where(logical_and(d.egy > emin, d.egy < emax))
         msi = max(si[w])
         ti += sum(si[w])
         ww = where(logical_and(si[w] > msi*eth, d.ide[w] == 0))
@@ -755,10 +813,15 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
         if i1 > i0:
             ds[i1].ide[:] = d0.ide
     nsig = len(sig)
+    es = array(es)
+    nes = len(es)-1
+    if nes < 2:
+        nes = 0
+    nrp = nsig+nes
     bfun = bkgd[1]
     nbp = len(bkgd[0])
-    nsb = nsig+nbp
-    ibp = range(nsig,nsb)
+    nsb = nrp+nbp
+    ibp = range(nrp,nsb)
     ide0 = [nsb+x for x in ide0]
     ide1 = [nsb+x for x in ide1]
     nde1 = nde + nsb
@@ -776,6 +839,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
     ye = sqrt(yd1)
     yte = sqrt(sum(yd))
     mp[:nsig] = sig
+    if nes > 0:
+        mp[nsig:nrp] = es[1:]
     ai0 = yt/ti
     mp[iid] = ai0    
     for i in range(ni):
@@ -787,12 +852,23 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
     mp1 = zeros(np)
     smp = zeros(np)
     smp[:nsig] = 0.25*mp[:nsig]
+    if nes > 0:
+        smp[nsig:nrp] = 0.002*mp[nsig:nrp]
+        if nes == 3:
+            smp[nrp-1] = 0.1*mp[nrp-1]
     smp[nsb:nde1] = 1.0
     smp[iid] = 0.25*ai0
     smp[ia[0]:ia[-1]] = 0.1*mp[ia[0]:ia[-1]]
     smp[iw[0]:iw[-1]] = 0.1*mp[iw[0]:iw[-1]]
     mp0[:nsig] = sig*0.01
     mp1[:nsig] = sig*100.0
+    if nes > 0:
+        mp0[nsig:nrp] = mp[nsig:nrp]*0.996
+        mp1[nsig:nrp] = mp[nsig:nrp]*1.004
+        for i in range(3, nes+1):
+            mp0[nsig+i] = 1e-16
+            mp1[nsig+i] = mp[nsig+2]*1e-3
+
     for i in range(nbp):
         bp = bkgd[0][i]
         mp[ibp[i]] = bp[0]
@@ -896,13 +972,15 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
     def getym(ip):
         if (ip < nde1):
             for i in range(ni):
-                if ip < nsig or (ip >= ide0[i] and ip < ide1[i]):
+                if ip < nrp or (ip >= ide0[i] and ip < ide1[i]):
                     ww = wde[i]
                     if len(ww[0]) > 0:
                         de0[i][:] = ds[i].de[ww]
                         ds[i].de[ww] = mp[ide0[i]:ide1[i]]
                     rs0[i] = rs[i]
-                    rs[i] = response(ds[i], sp, mp[0:nsig])        
+                    if nrp > nsig:
+                        es[1:] = mp[nsig:nrp]
+                    rs[i] = response(ds[i], sp, mp[0:nsig], es)
 
         if len(fixld) > 0:
             for i in range(ni):
@@ -1233,7 +1311,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
                     mp[ip] = hmp[i1,ip]
                     if (ip < nde1):                        
                         for ii in range(ni):
-                            if ip < nsig or (ip >= ide0[ii] and ip < ide1[ii]):
+                            if ip < nrp or (ip >= ide0[ii] and ip < ide1[ii]):
                                 rs[ii] = rs0[ii]
                                 if len(wde[ii][0]) > 0:
                                     ds[ii].de[wde[ii]] = de0[ii]
@@ -1316,8 +1394,13 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, wb=[],
             rrm = mean(rrej[i,wr[0]])
         if len(wwr[0]) > 0:
             wrm = mean(wrej[i,wwr[0],wwr[1]])
+        if nes == 0:
+            pps = [mp[0], smp[0], fmp[0]]
+        else:
+            pps = [mp[0], mp[nsig], mp[nsig+1]]
         pp = [i, trej, ttr, rrm, arm, wrm, 
-              r0, r0-ene[i1], mp[0], smp[0], fmp[0], rrej[i,0], mean(rrej[max(0,i-25):i+1,0])]
+              r0, r0-ene[i1], pps[0], pps[1], pps[2],
+              rrej[i,0], mean(rrej[max(0,i-25):i+1,0])]
         for ii in range(3):
             if ii < ni:
                 pp.append(mp[iid[ii]])
@@ -1390,17 +1473,25 @@ def rebin_spec(s, nr):
 def mod_spec(z, df, stype, er=[]):
     s = read_spec(df, stype, er)
     zm = FitMCMC(z.imp, s, s.yc.copy(), z.mpa, z.mpe, z.ra, z.ds, z.rs, z.ap, z.hmp, z.ene, z.nde, z.ide0, z.ide1, z.iid, z.ia, z.iw, z.ib, z.bf, z.frej, z.rrej, z.ierr, z.fixnd, z.fixld)
+    emin = calib_c2e(s.elo[0], z.rs[0].es)
+    emax = calib_c2e(s.ehi[-1], z.rs[0].es)
     for i in range(len(zm.ds)):
         ws = z.ds[i].ws
         if i < len(ws):
             iws = ws[i]
         else:
             iws = 0
-        zm.ds[i] = ion_data(z.ds[i].z, z.ds[i].k, z.ds[i].ns, ws, s.elo[0], s.ehi[-1], ddir=z.ds[i].ddir, sdir=z.ds[i].sdir, kmin=z.ds[i].kmin, kmax=z.ds[i].kmax)
+        zm.ds[i] = ion_data(z.ds[i].z, z.ds[i].k, z.ds[i].ns, ws, emin, emax, ddir=z.ds[i].ddir, sdir=z.ds[i].sdir, kmin=z.ds[i].kmin, kmax=z.ds[i].kmax)
     mcmc_avg(zm, zm.imp/2, zm.imp)
     return zm
 
-def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
+def apply_es(s, es):
+    s.elo[:] = calib_c2e(s.elo, es)
+    s.ehi[:] = calib_c2e(s.ehi, es)
+    s.em[:] = 0.5*(s.elo+s.ehi)
+    s.xm[:] = s.em
+    
+def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0,
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
@@ -1415,6 +1506,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
     sig: parameters of response function
     eth: intensity threshold for liens need energy correction
     stype: spectral data type
+    es: energy calibration scale, x=es[1]+es[2]*(e-es[0])+es[3]*(e-es[0])**2+...
     er: energy range of the fit
     nmc: number of mcmc iterations
     fixld: flags to fix l-dist
@@ -1437,11 +1529,20 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
     sde: min/max energy corrections
     bkgd: include a background term in the fit model    
     """
+    
     s = read_spec(df, stype, er)
+    if aes > 0:
+        apply_es(s, es)
+        plot(s.em, s.yc)
+        es = []
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
     kmax = atleast_1d(kmax)
     ds = []
+    if len(es) > 2:
+        es = array(es)
+    emin = calib_c2e(s.elo[0], es)
+    emax = calib_c2e(s.ehi[-1], es)
     for i in range(len(ks)):
         if i < len(ws):
             iws = ws[i]
@@ -1463,10 +1564,10 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype,
             nsi = ns[i]
         else:
             nsi = ns[-1]
-        di = ion_data(z, ki, nsi, iws, s.elo[0], s.ehi[-1], kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
+        di = ion_data(z, ki, nsi, iws, emin, emax, kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
         ds.append(di)
 
-    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, wreg, sde, bkgd)
+    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, es, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, wreg, sde, bkgd)
     return z
 
 def plot_ldist(z, op=0, sav=''):
@@ -1660,23 +1761,27 @@ def plot_ink(z, k=0, ws=0, op=0, col=0, xoffset=0, pn=1, sav='', m=0):
     if sav != '':
         savefig(sav)
 
-def plot_snk(z, sav='', op=0, xoffset=0, m=0):
+def plot_snk(z, sav='', col=0, op=0, xoffset=0, m=0):
     cols = ['k', 'b','r','g','c','m','y']
     if not op:
         clf()
-    plot_ink(z, k=1, pn=0, op=op, m=m)
-    plot_ink(z, k=2, ws=1, col=1, pn=0, op=1, m=m)
-    plot_ink(z, k=2, ws=3, col=2, pn=0, op=1, m=m)
+    plot_ink(z, k=1, col=col, pn=0, op=op, m=m)
+    plot_ink(z, k=2, ws=1, col=col+1, pn=0, op=1, m=m)
+    plot_ink(z, k=2, ws=3, col=col+2, pn=0, op=1, m=m)
     labs = ['H-Like', 'He-Like Singlet', 'He-Like Triplet']
     legend(labs)
-    plot_ink(z, k=1, pn=2, op=1, m=m)    
-    plot_ink(z, k=2, ws=1, col=1, pn=2, op=1, m=m)    
-    plot_ink(z, k=2, ws=3, col=2, pn=2, op=1, m=m)
+    plot_ink(z, k=1, col=col, pn=2, op=1, m=m)    
+    plot_ink(z, k=2, ws=1, col=col+1, pn=2, op=1, m=m)    
+    plot_ink(z, k=2, ws=3, col=col+2, pn=2, op=1, m=m)
     if sav != '':
         savefig(sav)
     
-def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
+def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0, es=1):
     fm = z.sp
+    if es > 0:
+        xe = z.sp.xm
+    else:
+        xe = z.sp.em
     if not op:
         clf()
     if effc == 0:
@@ -1703,15 +1808,15 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
             ylim(-ymax*0.01, ymax)
         if ylog > 0:
             ymin = max(yd)*ylog
-            semilogy(fm.em, ymin+yd)
-            semilogy(fm.em, ymin+ym)
+            semilogy(xe, ymin+yd)
+            semilogy(xe, ymin+ym)
             if z.bf != None:
-                semilogy(fm.em, ymin+yb)
+                semilogy(xe, ymin+yb)
         else:
-            plot(fm.em, yd)
-            plot(fm.em, ym)
+            plot(xe, yd)
+            plot(xe, ym)
             if z.bf != None:
-                plot(fm.em, yb)
+                plot(xe, yb)
         ylabel('Intensity')
     else:
         r = yd-ym
@@ -1719,7 +1824,7 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0):
         r[w] /= ye[w]
         w = where(ye <= 0)
         r[w] = 0
-        plot(fm.em, r)
+        plot(xe, r)
         ylabel('Residual')
     xlabel('Energy (eV)')
     if sav != '':

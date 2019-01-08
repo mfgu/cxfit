@@ -4,9 +4,16 @@ z = int(sys.argv[1])
 k = int(sys.argv[2])
 n0 = int(sys.argv[3])
 n1 = int(sys.argv[4])
-sm = int(sys.argv[5])
+if n1 == 0 and n0 == 0:
+    e = float(sys.argv[5])
+else:
+    sm = int(sys.argv[5])
 sdir = sys.argv[6]
 
+if n1 == 0 and n0 == 0:
+    os.system('python s.py --z=%d --k=%d --exc=1 --e=%g --sdir=%s'%(z,k,e,sdir))
+    os.system('python t.py %d %d 5.0 %s'%(z,k,sdir))
+    exit(0)
 for n in range(n0, n1+1):
     if sm == 0:
         os.system('python s.py --z=%d --k=%d --md=%d%02d --sdir=%s'%(z,k,n,n,sdir))

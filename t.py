@@ -8,9 +8,13 @@ k = int(sys.argv[2])
 de = 4.5
 if len(sys.argv) > 3:
     de = float(sys.argv[3])
+if len(sys.argv) > 4:
+    sdir = sys.argv[4]
+else:
+    sdir = 'spec'
 a = fac.ATOMICSYMBOL[z]
 p = '%s%02d'%(a, k)
-ps = 'spec/'+p
+ps = '%s/%s'%(sdir,p)
 z1 = z-k+1
 if k <= 2:
     e1 = (z1*z1)*13.6*1.5
