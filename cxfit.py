@@ -722,7 +722,7 @@ def ar_bkgd(s, p):
         y[w] = p[0]*de[w]/(1+exp(x[w]))
     return y
 
-def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wb=[],
+def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wes=[], wb=[],
               wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='',
               yb=1e-2, ecf='', ierr=[], wreg=10.0,
               sde=3.0, bkgd=([],None)):
@@ -854,8 +854,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wb=[],
     smp[:nsig] = 0.25*mp[:nsig]
     if nes > 0:
         smp[nsig:nrp] = 0.002*mp[nsig:nrp]
-        if nes == 3:
-            smp[nrp-1] = 0.1*mp[nrp-1]
+        for i in range(3,nes+1):
+            smp[nsig+i] = 0.05*mp[nsig+i]
     smp[nsb:nde1] = 1.0
     smp[iid] = 0.25*ai0
     smp[ia[0]:ia[-1]] = 0.1*mp[ia[0]:ia[-1]]
@@ -868,7 +868,10 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wb=[],
         for i in range(3, nes+1):
             mp0[nsig+i] = 1e-16
             mp1[nsig+i] = mp[nsig+2]*1e-3
-
+        for i in range(len(wes)):
+            mp0[nsig+i] = wes[i][0]
+            mp1[nsig+i] = wes[i][1]
+            
     for i in range(nbp):
         bp = bkgd[0][i]
         mp[ibp[i]] = bp[0]
@@ -1295,6 +1298,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wb=[],
         trej = 0.0
         nrej = 0
         for ip in range(nde2):
+            if mp1[ip] <= mp0[ip]:
+                continue
             xp0 = (mp0[ip]-hmp[i1,ip])/smp[ip]
             xp1 = (mp1[ip]-hmp[i1,ip])/smp[ip]
             (rn,yp,y0,y1) = rand_cg(xp0, xp1)            
@@ -1491,7 +1496,7 @@ def apply_es(s, es):
     s.em[:] = 0.5*(s.elo+s.ehi)
     s.xm[:] = s.em
     
-def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0,
+def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0, wes=[],
              er=[], nmc=5000, fixld=[], fixnd=[], racc=0.35, kmin=0, kmax=-1,
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-2, ecf='',
@@ -1533,7 +1538,6 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0,
     s = read_spec(df, stype, er)
     if aes > 0:
         apply_es(s, es)
-        plot(s.em, s.yc)
         es = []
     sig = atleast_1d(sig)
     kmin = atleast_1d(kmin)
@@ -1566,8 +1570,7 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0,
             nsi = ns[-1]
         di = ion_data(z, ki, nsi, iws, emin, emax, kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
         ds.append(di)
-
-    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, es, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, wreg, sde, bkgd)
+    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, es, wes, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, wreg, sde, bkgd)
     return z
 
 def plot_ldist(z, op=0, sav=''):
