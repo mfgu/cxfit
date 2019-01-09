@@ -44,4 +44,7 @@ for n in range(n0, n1+1):
                     jm = -jm
                 os.system('python s.py --z=%d --k=%d --swm=3 --md=%d%02d%02d --sdir=%s'%(z, k, jm, n, n, sdir))
                 os.system('python pnk.py %d %d %d %d %s'%(z, k, jm, n, sdir))
-    
+    elif sm >= 10:
+        os.system('python s.py --z=%d --k=%d --swm=%d --md=%d%02d --sdir=%s'%(z,k,sm,n,n,sdir))
+        os.system('python pnk.py %d %d 0 %d %s 1'%(z, k, n, sdir))
+        

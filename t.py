@@ -12,11 +12,15 @@ if len(sys.argv) > 4:
     sdir = sys.argv[4]
 else:
     sdir = 'spec'
+if len(sys.argv) > 5:
+    dc = int(sys.argv[5])
+else:
+    dc = 0
 a = fac.ATOMICSYMBOL[z]
 p = '%s%02d'%(a, k)
 ps = '%s/%s'%(sdir,p)
 z1 = z-k+1
-if k <= 2:
+if k <= 2 or dc:
     e1 = (z1*z1)*13.6*1.5
 elif k <= 10:
     e1 = (z1*z1)*13.6*0.25*1.5

@@ -11,6 +11,8 @@ ap.add_option('--mm', dest='mm', type='int', default=-1, help='max n for full mi
 ap.add_option('--nc', dest='nc', type='int', default=0, help='max n for collisional excitation')
 ap.add_option('--ni', dest='ni', type='int', default=0, help='max n for collisional ionization')
 ap.add_option('--nr', dest='nr', type='int', default=0, help='max n for radiative recombination')
+ap.add_option('--nd1', dest='nd1', type='int', default=0, help='max n1 for double capture')
+ap.add_option('--nd2', dest='nd2', type='int', default=0, help='max n2 for double capture')
 ap.add_option('--sfac', dest='sfac', type='string', default='', help='convert to sfac input')
 ap.add_option('--tgt', dest='tgt', type='string', default='H,H2,He,CO,CO2,N2,H2O,CH4,O2', help='cx target')
 ap.add_option('--ldist', dest='ldist', type='int', default=5, help='ldist type')
@@ -55,6 +57,7 @@ WallTime('OPT')
 #SetPotentialMode(20)
 gs=[]
 ga=[]
+gd=[]
 if opts.mm > 0:
     mm1 = opts.mm + 1
 elif opts.mm < 0:
@@ -66,7 +69,23 @@ for n in range(nmin, mm1):
     ga.append('g%d'%n)
 for n in range(mm1, nm1):
     ga.append('g%d'%n)
-    
+
+for n1 in range(2, opts.nd1+1):
+    for n2 in range(n1, opts.nd2+1):
+        if k < 2 or k > 3:
+            continue
+        gd.append('d.%d.%d'%(n1,n2))
+        if k == 2:
+            if n1 == n2:
+                Config(gd[-1], '%d*2'%n1)
+            else:
+                Config(gd[-1], '%d*1 %d*1'%(n1,n2))
+        else:
+            if n1 == n2:
+                Config(gd[-1], '1s1 %d*2'%n1)
+            else:
+                Config(gd[-1], '1s1 %d*1 %d*1'%(n1,n2))
+
 ConfigEnergy(0)
 if k <= 2:
     OptimizeRadial(['g1','g2'])
@@ -79,6 +98,8 @@ WallTime('EN')
 Structure(p+'b.en', gs)
 for n in range(mm1, nm1):
     Structure(p+'b.en', ['g%d'%n])
+for d in gd:
+    Structure(p+'b.en', [d])
 Structure(p+'b.en', ['i1'])
 MemENTable(p+'b.en')
 PrintTable(p+'b.en', p+'a.en')
@@ -90,15 +111,16 @@ if k > 1:
 
 WallTime('TR')
 TRTable(p+'b.tr', ga, ga)
-"""
-for n in range(nmin,nm1):
-    for m in range(n,nm1):
-        if n == 1 and m == 1:
-            continue
-        TRTable(p+'b.tr', ['g%d'%n], ['g%d'%m])
-"""
+if len(gd) > 0:
+    TRTable(p+'b.tr', ga, gd)
+    TRTable(p+'b.tr', gd, gd)    
 PrintTable(p+'b.tr', p+'a.tr')
 
+if len(gd) > 0:
+    WallTime('AI')
+    AITable(p+'b.ai', gd, ['i1'])
+    PrintTable(p+'b.ai', p+'a.ai')
+    
 if opts.nc >= nmin:
     WallTime('CE')
     for n in range(nmin, opts.nc+1):

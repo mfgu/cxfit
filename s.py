@@ -34,7 +34,7 @@ dn = opts.dn
 tgt = opts.tgt
 
 a = fac.ATOMICSYMBOL[z]
-os.system('mkdir spec')
+os.system('mkdir %s'%opts.sdir)
 p = '%s%02d'%(a, k)
 pd = 'data/'+p
 ps = '%s/%s'%(opts.sdir,p)
@@ -111,12 +111,16 @@ else:
 ps0 = ps
 for kk in range(kk0, kk1+1):
     if nn > 0:
+        if opts.swm >= 10:
+            cm = 'd'
+        else:
+            cm = 'k'
         if opts.md >= 0:
             md = sw*10000 + nn*100+kk        
-            ps = '%sn%02dk%02d'%(ps0, sw*100+nn, kk)
+            ps = '%sn%02d%s%02d'%(ps0, sw*100+nn, cm, kk)
         else:
             md = -(sw*10000 + nn*100+kk)
-            ps = '%sm%02dk%02d'%(ps0, sw*100+nn, kk)
+            ps = '%sm%02d%s%02d'%(ps0, sw*100+nn, cm, kk)
     if opts.exc == 0:
         SetCXRates(md, opts.tgt)
         SetCxtDensity(1e-5)
@@ -124,6 +128,8 @@ for kk in range(kk0, kk1+1):
         SetCERates(1)
         SetAbund(k, 1.0)
         SetEleDensity(1.0)
+    if opts.swm >= 10:
+        SetAIRates(0)
     WallTime('pop')
     InitBlocks()
     DumpRates(ps+'a.rm', 0, 0, -1, 1)

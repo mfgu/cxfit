@@ -237,6 +237,7 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
         idx[:,:] = -1
         idx[ir0,ir1] = arange(len(ir0), dtype=int32)
     else:
+        ds0 = ''
         rd = None
         r = None
         ps = '%sn%02dk%02d'%(ps0, ns[0], 0)
@@ -789,7 +790,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wes=[]
         ww = where(logical_and(si[w] > msi*eth, d.ide[w] == 0))
         if (len(ww[0]) > 0):
             d.ide[w[0][ww]] = 1
-
+        if d.k == 0:
+            d.ide[:] = 1
     iea = zeros(ni)
     merr = 0.0
     if len(ierr) > 0:
@@ -1099,7 +1101,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wes=[]
             wk0 = ds[i].wk0[w]
             im = sum(wk0*ds[i].xk[w])/sum(wk0)
             nk = len(wk)
-            if nk > 3:
+            if nk > 3 and ds[i].k > 0:
                 for j in range(nk-1, 0, -1):
                     if wk[j] > 0 and wk[j-1]/wk[j] < wk0[j-1]/wk0[j]:
                         break
