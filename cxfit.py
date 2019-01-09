@@ -1828,7 +1828,7 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0, es=1, ic=[]):
             if z.bf != None:
                 semilogy(xe, ymin+yb)
             for i in range(nc):
-                semilogy(ze, ymin+yx[i])
+                semilogy(xe, ymin+yx[i])
         else:
             plot(xe, yd)
             plot(xe, ym)
