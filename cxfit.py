@@ -1781,7 +1781,7 @@ def plot_snk(z, sav='', col=0, op=0, xoffset=0, m=0):
     if sav != '':
         savefig(sav)
     
-def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0, es=1):
+def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0, es=1, be=-1):
     fm = z.sp
     if es > 0:
         xe = z.sp.xm
@@ -1795,12 +1795,17 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0, es=1):
         ye = sqrt(yd)
         if z.bf != None:
             yb = z.bf(fm, z.mpa[z.ib])*fm.eff
+        if be >= 0:
+            (yx,rx) = calc_spec(z.ds[be], z.rs[be])
+            yx *= fm.eff
     else:
         yd = fm.yd
         ym = z.ym/fm.eff
         ye = fm.ye.copy()
         if z.bf != None:
             yb = z.bf(fm, z.mpa[z.ib])
+        if be >= 0:
+            (yx,rx) = calc_spec(z.ds[be], z.rs[be])
     ye1 = zeros(len(yd))
     if type(z.ierr) == type(0.0):
         ye1 = z.ierr*ym
@@ -1817,11 +1822,15 @@ def plot_spec(z, res=0, op=0, ylog=0, sav='', ymax=0, effc=0, es=1):
             semilogy(xe, ymin+ym)
             if z.bf != None:
                 semilogy(xe, ymin+yb)
+            if be >= 0:
+                semilogy(ze, ymin+yx)
         else:
             plot(xe, yd)
             plot(xe, ym)
             if z.bf != None:
                 plot(xe, yb)
+            if be >= 0:
+                plot(xe, yx)
         ylabel('Intensity')
     else:
         r = yd-ym
