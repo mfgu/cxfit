@@ -97,11 +97,11 @@ kk = -2
 sw = 0
 amd = abs(md)
 if amd >= 10000:
-    sw = amd/10000
-    md = amd%10000
+    sw = int(amd/10000)
+    md = int(amd%10000)
 if md >= 100:
-    kk = md%100
-    nn = md/100
+    kk = int(md%100)
+    nn = int(md/100)
 if kk == nn:
     kk0 = 0
     kk1 = nn-1

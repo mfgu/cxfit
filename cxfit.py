@@ -2,7 +2,7 @@ from numpy import *
 from pylab import *
 import os
 from collections import namedtuple
-from scipy import special, integrate, interpolate, optimize
+from scipy import special, integrate, interpolate, optimize, stats
 from pfac import fac
 from pfac import rfac
 from pfac import crm
@@ -152,12 +152,12 @@ def rad_cas(z, k, emin, emax, nmin=0, nmax=100, ist='', ddir='data', sdir='spec'
     ds0 = '%s/%s%02d'%(ddir, a, k)
     rd = rfac.FLEV(ds0+'a.en')
     r = rcs(ps0+'a.r1')
-    ir0 = int32(r[1])
-    ir1 = int32(r[0])
+    ir0 = int32(r[2])
+    ir1 = int32(r[1])
     im1 = max(ir1)
     im = 1 + im1
     trm = zeros((im,im))
-    trm[ir0,ir1] = -r[2]
+    trm[ir0,ir1] = -r[3]
     for i in range(im):
         trm[i,i] = -sum(trm[:i,i])
     w = []
@@ -225,8 +225,8 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
         rd = rfac.FLEV(ds0+'a.en')
         fn = ps0+'a.r1'
         r = rcs(fn)
-        ir0 = int32(r[1])
-        ir1 = int32(r[0])
+        ir0 = int32(r[2])
+        ir1 = int32(r[1])
         im = 1 + max(ir1)
         idx = zeros((im,im), dtype=int32)
         egy = rd.e[ir1] - rd.e[ir0]
@@ -299,11 +299,11 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
                     else:
                         ofn = ps + 'a.r7'
                     c = rcs(ofn)
-                    ic0 = atleast_1d(int32(c[0]))
-                    ic1 = atleast_1d(int32(c[1]))
+                    ic0 = atleast_1d(int32(c[1]))
+                    ic1 = atleast_1d(int32(c[2]))
                     w = where(ic0 == min(ic0))
                     w = w[0]
-                    ad[i,ki,ic1[w]] += c[2][w]
+                    ad[i,ki,ic1[w]] += c[3][w]
                 else:
                     it0 = ir0
                     it1 = ir1
@@ -925,7 +925,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wes=[]
     iy = zeros((ni,nd))
     xin = arange(-30.0, 0.05, 0.05)
     xin[-1] = 0.0
-    yin = integrate.cumtrapz(normpdf(xin, 0.0, 1.0), xin, initial=0.0)
+    yin = integrate.cumtrapz(stats.norm().pdf(xin), xin, initial=0.0)
     yin[0] = yin[1]*(yin[1]/yin[2])
     fin0 = interpolate.interp1d(xin, yin, kind='linear',
                                 bounds_error=False, fill_value=(yin[0],0.5))
@@ -1433,7 +1433,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wes=[]
         if i == imp-1 or (nsav > 0 and (i+1)%nsav == 0):
             print('pickling: %s %10.3E'%(fsav, time.time()-t0))
             if nsav > 0:
-                fs = open(fsav, 'w')
+                fs = open(fsav, 'wb')
             for ii in range(ni):
                 if (len(fixnd) > 0):
                     ij = fixnd[ii]
@@ -1444,7 +1444,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4, es=[], wes=[]
                     if ij >= 0 and ij < ni:
                         hmp[:,iw[ii]:iw[ii+1]] = hmp[:,iw[ij]:iw[ij+1]]
             zi = FitMCMC(i+1, sp, y.copy(), mpa, mpe, r, ds, rs, ap, hmp, ene, nde, ide0, ide1, iid, ia, iw, ibp, bfun, frej, rrej, (iea,iye), fixnd, fixld)
-            mcmc_avg(zi, i/2)
+            mcmc_avg(zi, int(i/2))
             if nsav > 0:
                 pickle.dump(zi, fs)
                 fs.close()
@@ -1949,8 +1949,8 @@ def sum_tnk(z, k=0, ws = 0):
         if d.k == k:
             break
     v = d.rd.v[:len(c)]
-    vn = v/100
-    vk = v%100
+    vn = int32(v/100)
+    vk = int32(v%100)
     nmax = nanmax(vn)
     r = zeros((nmax,nmax))
     s = zeros((nmax,nmax))
@@ -1969,8 +1969,8 @@ def avg_tnk(z, k=0, ws=0, m=0.25):
             break
     im = len(d.ad[0,0])
     v = d.rd.v[:im]
-    vn = v/100
-    vk = v%100
+    vn = int32(v/100)
+    vk = int32(v%100)
     nmax = nanmax(vn)
     r = zeros((nmax,nmax))
     s = zeros((nmax,nmax))
@@ -2011,11 +2011,11 @@ def plot_tnk(z, op=0, nmin=8, nmax=12, kmax=6, pn0=4, pn1=12,
     pn1 = min(pn1, n+1)
     idx = range(pn0-1,pn1)
     if pn1 > pn0:
-        errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='o', color=cols[col])
+        errorbar(xn[idx], (tr/trs)[idx], yerr=(ts/trs)[idx], capsize=3, marker='s', fillstyle='none', color=cols[col])
     labs = ['N-dist']
     for i in range(nmin, nmax+1):
         km = min(kmax+1, i)
-        errorbar(xk[:km], y[i-1][:km], yerr=ye[i-1][:km], capsize=3, marker='o', color=cols[col+1+(i-nmin)%(len(cols)-1)])
+        errorbar(xk[:km], y[i-1][:km], yerr=ye[i-1][:km], capsize=3, marker='o', color=cols[col+(i-nmin)%(len(cols)-1)])
         labs.append('L-dist N=%d'%i)
     if lab > 0:
         legend(labs)
@@ -2031,7 +2031,7 @@ def plot_rnk(z, sav='', op=0):
     n0 = z.ds[0].ns[0]
     n1 = z.ds[0].ns[-1]
     if n1 > n0:
-        lab=['N-dist','L-dist H-like',
+        lab=['N-dist H-like','L-dist H-like', 'N-dist He-like',
              'L-dist He-like Singlet','L-dist He-like Triplet']
         i0 = 0
     else:
@@ -2039,8 +2039,10 @@ def plot_rnk(z, sav='', op=0):
         i0 = -1
     plot_tnk(z, k=1, nmin=nm, nmax=nm, kmax=z.ds[0].kmax,
              pn0=n0, pn1=n1, lab=0, col=i0, op=op)
+    n0 = z.ds[1].ns[0]
+    n1 = z.ds[1].ns[-1]
     plot_tnk(z, k=2, nmin=nm, nmax=nm, kmax=z.ds[1].kmax,
-             pn0=n0, pn1=0, lab=0, col=i0+1, op=1, ws=1)
+             pn0=n0, pn1=n1, lab=0, col=i0+1, op=1, ws=1)
     plot_tnk(z, k=2, nmin=nm, nmax=nm, kmax=z.ds[1].kmax,
              pn0=n0, pn1=0, lab=0, col=i0+2, op=1, ws=3)
     legend(lab)
