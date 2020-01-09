@@ -7,7 +7,7 @@ from optparse import OptionParser
 ap = OptionParser()
 ap.add_option('--z', dest='z', type='int', help='atomic number')
 ap.add_option('--k', dest='k', type='int', help='number of electrons')
-ap.add_option('--dn', dest='dn', default='/Users/yul20/atomic/chintan/Kronos_v3.1', type='string', help='kronos path')
+ap.add_option('--dn', dest='dn', default='/Users/yul20/src/Kronos_v3.1', type='string', help='kronos path')
 ap.add_option('--tgt', dest='tgt', type='string', default='H2', help='neutral target')
 ap.add_option('--ldist', dest='ldist', type='int', default=5, help='LDist option')
 ap.add_option('--md', dest='md', type='int', default=2, help='mode')

@@ -2,9 +2,8 @@ from pfac.fac import *
 import sys
 import os
 
-kd = '/Users/yul20/atomic/chintan/Kronos_v3.1'
-#for t in ["H", "He", "H2", "H2O", "CO", "CO2", "O2", "N2", "Ne", "Ar", "Kr", "Xe", "CH4", "C2H6O", "O", "F"]:
-for t in ['S', 'CS2']:
+kd = '/Users/yul20/src/Kronos_v3.1'
+for t in ["H", "He", "H2", "H2O", "CO", "CO2", "O2", "N2", "Ne", "Ar", "Kr", "Xe", "CH4", "C2H6O", "O", "F", "S" , "CS2"]:
     SetCXTarget(t)
     PrintCXTarget()
     e = [10**(x*0.1-3.0) for x in range(81)]
