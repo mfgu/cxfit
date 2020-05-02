@@ -5,7 +5,7 @@ import os
 
 z = int(sys.argv[1])
 k = int(sys.argv[2])
-de = 4.5
+de = 1.5
 if len(sys.argv) > 3:
     de = float(sys.argv[3])
 if len(sys.argv) > 4:

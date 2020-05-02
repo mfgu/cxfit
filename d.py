@@ -157,7 +157,7 @@ if opts.tgt != '':
 ReinitDBase(0)
 MemENTable(p+'b.en')
 WallTime('SRO')
-RecoupleRO(p+'b.ro', p+'b.sro', p+'i.LS')
+RecoupleRO(p+'b.ro', p+'b.sro')
 PrintTable(p+'b.sro', p+'a.sro')
 
 if (opts.sfac != ''):
