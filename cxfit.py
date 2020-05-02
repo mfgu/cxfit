@@ -1,5 +1,6 @@
 from numpy import *
 from pylab import *
+import matplotlib.pyplot as plt
 import os
 import os.path
 from collections import namedtuple
@@ -479,7 +480,7 @@ def response(d, s, sig, es=[], eip=[]):
         sig0 = sig.copy()
         eip0 = eip.copy()
         eip = eip[:-1];
-        sig = sig[:-2];
+        sig = sig[:-1];
     else:
         sig0 = sig
         eip0 = eip
@@ -507,43 +508,48 @@ def response(d, s, sig, es=[], eip=[]):
         egy[i] = egy[j] + d.de[i]
     bn = 0.0
     fxy = None
-    ns = len(sig)
-    nei = len(eip)+1
-    ns = len(sig)
-    ns1 = ns-nei
-    if (ns1 > 1):
-        if (ns1 > 2):
-            gamma = sig[nei+2]
-        else:
-            gamma = 1.0
-        x = arange(-50.0/sig[nei], 50.0*gamma, 0.025)
-        y = escape_peak(x, sig[nei], gamma)
-        yi = zeros(len(y))
-        w = where(y > -300)
-        yi[w] = exp(y[w])
-        yi = cumsum(yi)
-        yi = log(yi/yi[-1])
-        fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value=(y[0],y[-1]))
-        x = arange(-15.0,1e-5,0.01)
-        y = exp(-0.5*x*x)
-        y = cumsum(y)
-        y = log(y*0.5/y[-1])
-        fxy0 = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
-    elif ns1 == 1:
-        x = arange(-15.0,1e-5,0.02)
-        y = voigt(sig[nei], x)
-        y = cumsum(y)
-        y = log(y*0.5/y[-1])
-        fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
-    elif ns1 == 0:
-        x = arange(-15.0,1e-5,0.02)
-        y = exp(-0.5*x*x)
-        y = cumsum(y)
-        y = log(y*0.5/y[-1])
-        fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
-        
-    def cprof(xx):
-        if ns1 > 1:
+    nst = len(sig)
+    nei = (len(eip)+1)
+    ns = int(0.01+nst/nei)
+    afxy = []
+    afxy0 = []
+    for ie in range(nei):
+        isig = sig[ie*ns:ie*ns+ns]
+        if (ns > 2):
+            gamma = isig[2]
+            x = arange(-50.0/isig[1], 50.0*gamma, 0.025)
+            y = escape_peak(x, isig[1], gamma)
+            yi = zeros(len(y))
+            w = where(y > -300)
+            yi[w] = exp(y[w])
+            yi = cumsum(yi)
+            yi = log(yi/yi[-1])
+            fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value=(y[0],y[-1]))
+            x = arange(-15.0,1e-5,0.01)
+            y = exp(-0.5*x*x)
+            y = cumsum(y)
+            y = log(y*0.5/y[-1])
+            fxy0 = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
+            afxy.append(fxy)
+            afxy0.append(fxy0)
+        elif ns > 1:
+            x = arange(-15.0,1e-5,0.02)
+            y = voigt(isig[1], x)
+            y = cumsum(y)
+            y = log(y*0.5/y[-1])
+            fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
+            afxy.append(fxy)
+        elif ns == 1:
+            x = arange(-15.0,1e-5,0.02)
+            y = exp(-0.5*x*x)
+            y = cumsum(y)
+            y = log(y*0.5/y[-1])
+            fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
+            afxy.append(fxy)
+    def cprof(xx, ie):
+        fxy = afxy[ie]
+        if ns > 2:
+            fxy0 = afxy0[ie]
             yy1 = exp(fxy(xx))
             w = xx <= 0
             w0 = where(w)[0]
@@ -576,16 +582,17 @@ def response(d, s, sig, es=[], eip=[]):
                     break
                 if eip[ie]>e:
                     break
-            esig = sig[ie]
+            esig = sig[ie*ns]
         else:
+            ie = 0
             esig = sig[0]
-        if ns1 <= 1:
+        if ns < 2:
             dhi = (ehi-e)/esig
             dlo = (elo-e)/esig
             w = where(logical_or(abs(dhi)<15,abs(dlo)<15))
-            ar[w,i] = cprof(dhi[w])-cprof(dlo[w])
+            ar[w,i] = cprof(dhi[w],ie)-cprof(dlo[w],ie)
         else:
-            ar[:,i] = cprof((ehi-e)/esig)-cprof((elo-e)/esig)
+            ar[:,i] = cprof((ehi-e)/esig,ie)-cprof((elo-e)/esig,ie)
                 
     aj = zeros((nn,nr,nm))
     for i in range(nn):
@@ -605,7 +612,7 @@ def calc_spec(d, r, ar=None):
         if len(d.rs[r].eip) > 0 and d.rs[r].eip[-1] < 0:
             xeff = -d.rs[r].eip[-1]
             w = where(d.sp.xm < xeff)
-            y[w] *= exp(-d.rs[r].sig[-2]*(d.sp.xm[w]/xeff)**(-d.rs[r].sig[-1]))
+            y[w] *= d.sp.eff[w]**(d.rs[r].sig[-1])
         return (y,ar)
     n = len(d.ns)
     if ar == None:
@@ -713,7 +720,7 @@ def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
     if len(z.rs[0].eip) > 0 and z.rs[0].eip[-1] < 0:
         xeff = -z.rs[0].eip[-1]
         w = where(z.sp.xm < xeff)
-        z.ym[w] *= exp(-z.rs[0].sig[-2]*(z.sp.xm[w]/xeff)**(-z.rs[0].sig[-1]))
+        z.ym[w] *= z.sp.eff[w]**(z.rs[0].sig[-1])
         
 def read_spec(df, stype, er=[]):
     if type(df) == tuple:
@@ -1191,7 +1198,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
         if len(eip) > 0 and eip[-1] < 0:
             xeff = -eip[-1]            
             w = where(sp.xm < xeff)
-            y[w] *= exp(-mp[nsig-2]*(sp.xm[w]/xeff)**(-mp[nsig-1]))
+            y[w] *= eff[w]**(mp[nsig-1])
 
     def ilnlikely(ip):
         getym(ip)
@@ -1990,17 +1997,21 @@ def avg_wnk(z, k=0, ws=0, m=0.25):
     return (wn, en, wk, ek)
     
 def plot_ink(z, k=0, s=0, op=0, col=0, xoffset=0, pn=1, sav='', ws=0,
-             m=0, tsav=''):
+             m=0, tsav='', ff=0):
     cols = ['k', 'b','r','g','c','m','y']
     if not op:
         clf()
+    ii = 0
     if k == 0:
         k = z.ds[0].k
+        ii = 0
     for d in z.ds:
         if d.k == k:
             break
+        ii += 1
     if k < 0:
         d = z.ds[-1-k]
+        ii = -1-k
     if m <= 0:
         (wn, en, wk, ek) = sum_wnk(z, k, ws)
     else:
@@ -2013,6 +2024,12 @@ def plot_ink(z, k=0, s=0, op=0, col=0, xoffset=0, pn=1, sav='', ws=0,
         errorbar(xn, wn, yerr=en, capsize=3, marker='s', fillstyle='none', color=cols[col%len(cols)])
     if pn != 2:
         errorbar(xk, wk, yerr=ek, capsize=3, marker='o', color=cols[col%len(cols)])
+    if ff > 0:
+        p = z.hmp[int(z.imp/2):z.imp,z.iw[ii]:z.iw[ii]+nk]
+        ap = sum(p[:,ff:],1)
+        aa = mean(ap)
+        da = std(ap)
+        errorbar([ff+ii*0.15], [aa], yerr=da, capsize=3, marker='^', color=cols[col%len(cols)])
     xlabel('N/L')
     ylabel('Fraction')
     if sav != '':
@@ -2024,21 +2041,26 @@ def plot_ink(z, k=0, s=0, op=0, col=0, xoffset=0, pn=1, sav='', ws=0,
         savetxt(tf+'.nd', transpose((array(d.ns)+1e-3, wn, en)), fmt='%2d %11.4E %11.4E')
         savetxt(tf+'.kd', transpose((array(d.xk)+1e-3, wk, ek)), fmt='%2d %11.4E %11.4E')
 
-def plot_snk(z, sav='', col=0, op=0, xoffset=0, m=0, ws=0, tsav=''):
+def plot_snk(z, sav='', col=0, op=0, xoffset=0, m=0, ws=0, tsav='', ff=0):
     cols = ['k', 'b','r','g','c','m','y']
     if not op:
         clf()
-    plot_ink(z, k=1, col=col, pn=1, op=op, m=m, tsav=tsav)
+    plot_ink(z, k=1, col=col, pn=1, op=op, m=m, tsav=tsav, ff=ff)
     if ws == 2:
-        plot_ink(z, k=2, ws=1, col=col+1, pn=1, op=1, m=m, tsav=tsav)
-        plot_ink(z, k=2, ws=3, col=col+2, pn=1, op=1, m=m, tsav=tsav)
+        plot_ink(z, k=2, ws=1, col=col+1, pn=1, op=1, m=m, tsav=tsav, ff=ff)
+        plot_ink(z, k=2, ws=3, col=col+2, pn=1, op=1, m=m, tsav=tsav, ff=ff)
         labs = ['N-dist H-like', 'L-dist H-like',
                 'N-dist He-Like Singlet', 'L-dist He-like Singlet',
-                'N-dist He-Like Triplet', 'L-dist He-like Triplet']
+                'N-dist He-Like Triplet', 'L-dist He-like Triplet']            
     else:
-        plot_ink(z, k=2, ws=ws, col=col+1, pn=1, op=1, m=m, tsav=tsav)
-        labs = ['N-dist H-like', 'L-dist H-like',
-                'N-dist He-Like', 'L-dist He-like']        
+        plot_ink(z, k=2, ws=ws, col=col+1, pn=1, op=1, m=m, tsav=tsav, ff=ff)
+        labs = ['N-dist H-like', 'L-dist H-like']
+        if ff > 0:
+            labs.append(r'H-like $f_{L>%d}$'%(ff-1))
+        labs.append('N-dist He-like')
+        labs.append('L-dist He-like')
+        if ff > 0:
+            labs.append(r'He-like $f_{L>%d}$'%(ff-1))
         
     legend(labs)
     #plot_ink(z, k=1, col=col, pn=2, op=1, m=m)    
@@ -2467,29 +2489,62 @@ def plot_ksp(z):
     plot_spec(z, xr=[7.8e3, 9.3e3], err=1, sav='fe+h2_spec_hn.pdf')
     plot_snk(z, sav='fe+h2_snk.pdf')
     
-def plot_kbs(z, i, sav=''):
+def plot_kbs(z, i, sav='', xr=[[1e3,2.5e3],[6.5e3,9.5e3]]):    
     x = z.sp.xm
+    if len(xr) == 0:
+        xr = [[x[0],x[-1]]]    
     d = z.ds[i]
     r = z.rs[i]
     k = argmax(d.an[:-1])
+    nn = d.ns[k]
+    ks = ['s', 'p', 'd', 'f', 'g', 'h', 'i']
     y = r.aj[k]
     if i == 1:
         y = y + z.rs[2].aj[k]
     y = y/sum(y)
-    y *= sum(z.sp.yc)/sum(y[:,0])
+    y *= sum(z.sp.yc)
+    if i == 1:
+        y *= 2.5
+    dy = max(z.sp.yc)*0.075
     eff = z.sp.eff.copy()
-    xe = r.eip[-1]
-    if xe < 0:
-        w = where(x < -xe)
-        eff[w] *= exp(-r.sig[-2]*(x[w]/3e3)**(-r.sig[-1]))
-    clf()
+    labs = []
+    if len(r.eip) > 0:
+        xe = r.eip[-1]
+        if xe < 0:
+            w = where(x < -xe)
+            eff[w] *= eff[w]**(r.sig[-1])
     for j in range(len(d.wk)):
         y[:,j] *= eff
-        plot(x+125*j, y[:,j]+0.15*j*max(y[:,0]))
-    plot(x, 0.15*(1+len(d.wk))*max(y[:,0])+z.sp.yc*2)
-    if i == 0:
-        title('H-Like')
-    else:
-        title('He-Like')
+    clf()
+    nr = len(xr)
+    for ir in range(nr):
+        plt.subplot(1,nr,ir+1)        
+        dx = 0.04*(xr[ir][1]-xr[ir][0])
+        for j in range(len(d.wk)):
+            plt.plot(x+dx*j, y[:,j]+j*dy)
+            labs.append('$%d%s$'%(nn,ks[j]))
+            
+        ys = (1+len(d.wk))*dy
+        yc = z.sp.yc
+        plt.plot(x, ys+yc, color='k')
+        labs.append('total exp')
+        if i == 0:
+            y0,r0 = calc_spec(z, 0)
+            plt.plot(x, ys+y0, color='r')
+            if ir == 1:
+                plt.text(xr[ir][0]+0.3*(xr[ir][1]-xr[ir][0]),
+                         max(ys+yc)*0.9, 'H-Like')
+        else:
+            y1,r1 = calc_spec(z, 1)
+            plt.plot(x, ys+y1, color='r')
+            if ir == 1:
+                plt.text(xr[ir][0]+0.3*(xr[ir][1]-xr[ir][0]),
+                         max(ys+yc)*0.9, 'He-Like') 
+        labs.append('total mod')
+        plt.xlim(xr[ir][0], xr[ir][1])
+        plt.xlabel('Energy (eV)')
+        if ir == 0:
+            plt.ylabel('Counts')
+            plt.legend(labs)
     if sav != '':
         savefig(sav)
