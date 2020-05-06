@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 import os
 import os.path
 from collections import namedtuple
-from scipy import special, integrate, interpolate, optimize, stats
+from scipy import special, integrate, interpolate, optimize, stats, linalg
 from pfac import fac
 from pfac import rfac
 from pfac import crm
+import ebit
 import pickle
 import time
 
@@ -137,7 +138,152 @@ def rcs(f):
     else:
         return r
 
-def rad_cas(z, k, emin, emax, nmin=0, nmax=100, ist='', ddir='data', sdir='spec'):
+def eb_tr(p, ddir='data', cnv=1):
+    h0,d = rfac.read_enf('%s/%s.en'%(ddir,p))
+    h1,r = rfac.read_trf('%s/%s.tr'%(ddir,p))
+    n = d[-1]['ilev'][-1]+1
+    m = max(d[-1]['pbasis'])+1
+    egy = zeros(n)
+    for i in range(len(d)):
+        egy[d[i]['ilev']] = d[i]['energy']
+    tr0 = zeros((n,n))
+    for i in range(len(r)):
+        i0 = r[i]['lower_index']
+        i1 = r[i]['upper_index']
+        tr0[i0,i1] += r[i]['rate']
+    if cnv == 0:
+        return egy,tr0,d,r
+    tr1 = zeros((m,m))
+    ntr1 = zeros(m)
+    b = loadtxt('%s/%s.bas'%(ddir,p), unpack=1)
+    c = []
+    pb = []
+    mb = []
+    for i in range(len(d)):
+        i0 = d[i]['ilev'][0]
+        i1 = d[i]['ilev'][-1]
+        ni = i1-i0+1
+        w = where((b[0] >= i0)&(b[0] <= i1))
+        ix = int32(b[0][w]-min(b[0][w]))*1000000 + int32(b[1][w]-min(b[1][w]))*100 + max(int32(b[2][w]))+int32(b[2][w])
+        sx = argsort(ix)
+        ci = transpose((b[3][w][sx]).reshape((ni,ni)))
+        c.append(ci)
+        pb.append(int32(b[1][w][sx]))
+        mb.append(int32(b[2][w][sx]))
+    for i in range(len(d)):
+        ci = c[i]
+        pbi = pb[i]
+        mbi = mb[i]
+        i0 = d[i]['ilev'][0]
+        i1 = d[i]['ilev'][-1]
+        ni = i1-i0+1
+        for j in range(i,len(d)):
+            cj = c[j]
+            pbj = pb[j]
+            mbj = mb[j]
+            j0 = d[j]['ilev'][0]
+            j1 = d[j]['ilev'][-1]
+            nj = j1-j0+1
+            ix = repeat(arange(i0,i1+1),nj).reshape((ni,nj))
+            jx = repeat(arange(j0,j1+1).reshape((1,nj)),ni,axis=0)
+            tij = matmul(ci*ci,matmul(tr0[ix,jx],transpose(cj*cj)))
+            for jj in range(nj):
+                jpb = pbj[jj]
+                ntr1[jpb] = max(ntr1[jpb],mbj[jj])
+                for ii in range(ni):
+                    ipb = pbi[ii]
+                    if ipb < jpb:
+                        tr1[ipb,jpb] += tij[ii,jj]
+    for j in range(m):
+        if ntr1[j] >= 0:
+            tr1[:,j] /= 1+ntr1[j]
+
+    return egy,tr0,tr1,d,r
+
+def eb_cas(z, k, p, emin, emax, ddir='data'):
+    a = fac.ATOMICSYMBOL[z]
+    f1 = '%s%02d%sa'%(a,k,p)
+    es, tr, d, r = eb_tr(f1, ddir=ddir, cnv=0)
+    m = len(tr[0])
+    w = where(tr > 0)
+    i0 = w[0]
+    i1 = w[1]
+    egy = es[i1]-es[i0]
+    tr = -tr
+    for i in range(m):
+        tr[i,i]=-sum(tr[:i,i])
+    if k == 1:
+        tpr = crm.TwoPhoton(z, 0)
+        tr[4,4] += tpr
+        tr[5,5] += tpr
+    elif k == 2:
+        tpr = crm.TwoPhoton(z, 1)
+        tr[8,8] += tpr
+    tri = linalg.pinv2(tr[1:,1:], cond=1e-12)
+    w = where((egy >= emin)&(egy <= emax))
+    egy = egy[w]
+    i0 = i0[w]
+    i1 = i1[w]
+    ai = matmul(diag(-tr[i0,i1]),tri[i1-1])
+    return (egy, i0, i1, tri, tr, ai)
+
+def cs_cx(z, k, n, sdir='spec'):
+    a = fac.ATOMICSYMBOL[z]    
+    f = sdir+'/%s%02da.r7'%(a,k)
+    r1 = loadtxt(f, unpack=1)
+    i1 = int32(r1[2])
+    n1 = 1+max(i1)
+    if n1 < n:
+        n1 = n
+    c1 = zeros(n1)
+    c1[i1] = r1[3]
+    return c1
+
+def eb_cx(z, k, ip, ddir='data', sdir='spec'):
+    a = fac.ATOMICSYMBOL[z]
+    p = '%s%02d'%(a,k)
+    f = ddir+'/%sa.en'%p
+    r = rfac.FLEV(f)
+    f0 = ddir+'/%sF%02da.bas'%(p,ip)
+    r0 = loadtxt(f0, unpack=1)
+    w = where(abs(r.j-r.j[0])%2 == 1)
+    w = w[0]
+    c1 = cs_cx(z, k, w, sdir=sdir)
+    h1,r1 = rfac.read_enf('%s/%sF%02da.en'%(ddir,p,ip))
+    
+    i = int32(r0[0])
+    j = int32(r0[1])
+    m = int32(r0[2])
+    b = r0[3]
+    n = 1+max(i)
+    c = zeros(n)
+    c2 = zeros(len(c1))
+    for ib in range(len(r1)):
+        i0 = r1[ib]['ilev'][0]
+        i1 = r1[ib]['ilev'][-1]
+        ni = i1-i0+1
+        w = where((i >= i0)&(i <= i1))
+        ix = (i[w]-min(i[w]))*1000000 + (j[w]-min(j[w]))*100 + (max(m[w])+m[w])
+        sx = argsort(ix)
+        ci = (b[w][sx]).reshape((ni,ni))
+        ct = transpose(ci)
+        pb = j[w][sx]
+        mb = m[w][sx]
+        cm = c1[pb[:ni]]/(r.j[pb[:ni]]+1.0)
+        c[i0:i1+1] = matmul(ci*ci, cm)
+        ck = matmul(ct*ct, c[i0:i1+1])
+        for t in range(ni):
+            c2[pb[t]] += ck[t]
+    return c,c1,c2
+"""
+    for k in range(n):
+        w = where(i == k)
+        c[k] = sum(c1[j[w]]*b[w]**2/(r.j[j[w]]+1.0))
+    return c,c1
+"""
+
+def rad_cas(z, k, emin, emax, nmin=0, nmax=100,
+            ist='', ddir='data', sdir='spec', pf=''):
     """calcualte the radiative cascade spectra
     z: atomic number
     k: number of electron
@@ -153,34 +299,49 @@ def rad_cas(z, k, emin, emax, nmin=0, nmax=100, ist='', ddir='data', sdir='spec'
     ps0 = '%s/%s%02d'%(sdir, a, k)
     ds0 = '%s/%s%02d'%(ddir, a, k)
     rd = rfac.FLEV(ds0+'a.en')
-    r = rcs(ps0+'a.r1')
-    ir0 = int32(r[2])
-    ir1 = int32(r[1])
-    im1 = max(ir1)
-    im = 1 + im1
-    trm = zeros((im,im))
-    trm[ir0,ir1] = -r[3]
+    if pf != '':
+        e0,t0,t1,dd,rr = eb_tr('%s%02d%sa'%(a,k,pf), ddir=ddir)
+        im = len(t1[0])
+        im1 = im-1
+        trm = -t1[:im,:im]
+        ir0 = repeat(arange(im),im).reshape((im,im))
+        ir1 = repeat(arange(im).reshape((1,im)),im,axis=0)
+        r = t0
+    else:
+        w = where(abs(rd.j-rd.j[0])%2 == 1)
+        w = w[0]
+        im = w[0]
+        im1 = im-1
+        r = rcs(ps0+'a.r1')
+        ir0 = int32(r[2])
+        ir1 = int32(r[1])
+        trm = zeros((im,im))
+        trm[ir0,ir1] = -r[3]
+    
     for i in range(im):
         trm[i,i] = -sum(trm[:i,i])
     w = []
     if k == 1:
         tpr = crm.TwoPhoton(z, 0)
-        w = where(rd.n == '2s+1(1)1')
+        w = where(rd.n == b'2s+1(1)1')
     elif k == 2:
         tpr = crm.TwoPhoton(z, 1)
-        w = where(rd.n == '1s+1(1)1.2s+1(1)0')
+        w = where(rd.n == b'1s+1(1)1.2s+1(1)0')
+    elif k == 4:
+        tpr = crm.TwoPhoton(z, 2)
+        w = where(rd.n == b'2s+1(1)1.2p-1(1)0')
     if len(w) == 1:        
         w = w[0]
         if len(w) == 1:
             w = w[0]
             trm[w,w] += tpr
     egy = rd.e[ir1] - rd.e[ir0]
-    w = where(logical_and(egy > emin, egy < emax))
+    w = where(logical_and(egy >= emin, egy <= emax))
     ir0 = ir0[w]
     ir1 = ir1[w]
     egy = egy[w]
     nt = len(ir0)
-    tri = pinv(trm[1:,1:],rcond=1e-12)
+    tri = linalg.pinv2(trm[1:,1:],cond=1e-12)
     ai = matmul(diag(-trm[ir0,ir1]),tri[ir1-1])
     w=where(ai < 1e-10)
     ai[w] = 0
@@ -201,6 +362,101 @@ def rad_cas(z, k, emin, emax, nmin=0, nmax=100, ist='', ddir='data', sdir='spec'
     ide = zeros(nt, dtype=int8)
     de = zeros(nt)
     return RadCas(rd, r, ir0, ir1, egy, wa, ai, trm, tri, z, k, ide, de, im, nt, im1, na)
+
+def eb_trm(z, k, nf=20, e0=2.0, e1=8.0, ddir='data'):
+    a = fac.ATOMICSYMBOL[z]    
+    es = array([10**(e0+i*(e1-e0)/(nf-1)) for i in range(nf)])
+
+    tpr = 0.0
+    rd = rfac.FLEV('%s/%s%02da.en'%(ddir,a,k))
+    w = []
+    if k == 1:
+        tpr = crm.TwoPhoton(z, 0)
+        w = where(rd.n == b'2s+1(1)1')
+    elif k == 2:
+        tpr = crm.TwoPhoton(z, 1)
+        w = where(rd.n == b'1s+1(1)1.2s+1(1)0')
+    elif k == 4:
+        tpr = crm.TwoPhoton(z, 2)
+        w = where(rd.n == b'2s+1(1)1.2p-1(1)0')
+    itp = -1
+    if len(w) == 1:        
+        w = w[0]
+        if len(w) == 1:
+            itp = w[0]
+    for i in range(nf):
+        p = '%s%02dF%02da'%(a,k,i)
+        print(p)
+        eg,t0,t1,d,r = eb_tr(p)
+        n = len(t1[0])
+        for j in range(n):
+            t1[j,j] = -sum(t1[:j,j])
+        t1[itp,itp] -= tpr
+        if i == 0:
+            trm = zeros((nf,n,n))
+        trm[i] = -t1
+    return es,trm
+            
+def int_rate(es,trm,y0,mt=10.0,ntm=50000,method='Radau',
+             rx=20.0, eu=10.0):
+    n = len(y0)
+    i = arange(n)
+    r0 = min(trm[0,i,i][1:])
+    r1 = max(trm[-1,i,i][1:])
+    t1 = mt/r0
+    dt = 1/(2*mt*r1)
+    nt = t1/dt
+    if nt > ntm:
+        nt = ntm
+    dtx = (log(t1)-log(dt))/nt
+    ta = zeros(nt)
+    ta[1:] = dt*exp(arange(nt-1)*dtx)
+    t1 = ta[-1]
+    emax = 12.4e3*1e-8/(2*pi*137.0*(rx*0.53e-8)**2)
+    xt = 1e10*ebit.e2v(eu,1.0)/(rx*0.53e-8)
+    print([t1,emax/1e6,xt/1e12])
+    loges = log(es)
+    dloges = loges[1]-loges[0]
+    def fd(t,y):
+        ef = log(emax/(1+(xt*t)**2))        
+        if (ef <= loges[0]):
+            a = trm[0]
+        elif (ef >= loges[-1]):
+            a = trm[-1]
+        else:
+            j = int((ef-loges[0])/dloges)
+            w = j+1
+            f = (ef-loges[j])/dloges
+            a = trm[j]*(1-f) + trm[w]*f
+        return -matmul(a,y)
+    sf = integrate.solve_ivp(fd, [0.0,t1], y0, t_eval=ta, method=method)
+    return sf
+
+def int_lines(r,sf,es,trm,rx=20.0,eu=10.0):
+    n = len(r.ir0)
+    s = zeros(n)
+    emax = 12.4e3*1e-8/(2*pi*137.0*(rx*0.53e-8)**2)
+    xt = 1e10*ebit.e2v(eu,1.0)/(rx*0.53e-8)
+    loges = log(es)
+    dloges = loges[1]-loges[0]
+    for i in range(1,len(sf.t)):
+        t = sf.t[i]
+        ef = log(emax/(1+(xt*t)**2))        
+        if (ef <= loges[0]):
+            a = trm[0]
+        elif (ef >= loges[-1]):
+            a = trm[-1]
+        else:
+            j = int((ef-loges[0])/dloges)
+            w = j+1
+            f = (ef-loges[j])/dloges
+            a = trm[j]*(1-f) + trm[w]*f
+        dt = sf.t[i]-sf.t[i-1]
+        y = sf.y[r.ir1,i]
+        w = where(y < 0)
+        y[w] = 0.0
+        s = s + y*dt*(-a[r.ir0,r.ir1])
+    return s
 
 def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-1):
     """cascade data
