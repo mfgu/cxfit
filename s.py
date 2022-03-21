@@ -138,7 +138,7 @@ for kk in range(kk0, kk1+1):
         DumpRates(ps+'a.r7', k, 7, -1, 1)
     else:
         DumpRates(ps+'a.r3', k, 3, -1, 1)
-    SetIteration(1e-5, 0.5)
+    SetIteration(1e-8, 0.5)
     LevelPopulation()
     
     SpecTable(ps+'b.sp')

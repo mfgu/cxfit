@@ -23,6 +23,7 @@ ap.add_option('--bf', dest='bf', type='float', default=0, help='B field')
 ap.add_option('--ef', dest='ef', type='float', default=0, help='E field')
 ap.add_option('--pf', dest='pf', type='string', default='F', help='EB pref')
 ap.add_option('--bea', dest='bea', type='float', default=0, help='B E angle')
+ap.add_option('--ti', dest='ti', type='float', default=0.0,  help='ion temp for motional stark effect')
 ap.add_option('--np', dest='np', type='int', default=0, help='omp threads')
 
 (opts, args) = ap.parse_args()
@@ -196,8 +197,13 @@ WallTime('SRO')
 RecoupleRO(p+'b.ro', p+'b.sro')
 PrintTable(p+'b.sro', p+'a.sro')
 
+if opts.bf > 0 and opts.ti > 0:
+    opts.ef = sqrt(opts.ti/ATOMICMASS[z]/1e9)*opts.bf
+    opts.bea = 90.0
+
 if opts.bf > 0 or opts.ef > 0:
     WallTime('EN EB')
+    print('E=%g B=%g A=%g'%(opts.ef, opts.bf, opts.bea))
     pf = p+opts.pf
     SetFields(opts.bf, opts.ef, opts.bea)
     for g in ga:

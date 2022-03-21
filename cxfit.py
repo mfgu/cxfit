@@ -1,7 +1,7 @@
 from numpy import *
 from pylab import *
 import matplotlib.pyplot as plt
-import os
+import os,sys
 import os.path
 from collections import namedtuple
 from scipy import special, integrate, interpolate, optimize, stats, linalg
@@ -11,6 +11,7 @@ from pfac import crm
 import ebit
 import pickle
 import time
+import mcpk, mcmc
 
 """cxfit uses MCMC algorithm to fit the charge exchange X-ray spectra to derive n/l distribution of the capture cross sections
 """
@@ -64,10 +65,13 @@ ar:  ar[:,j] is the response of j-th line, R((e-egy[j])
 aj:  response of capture n/l distribution. aj[n,:,l] is the spectra of capture to n/l orbital
 """
 
-IonData = namedtuple('IonData', ['ddir', 'sdir', 'ps0', 'ds0', 'rd', 'r', 'ir0', 'ir1', 'idx', 'egy', 'ai', 'ad', 'zai',
-                                 'z', 'k', 'ns', 'nm', 'kmin', 'kmax', 'an', 'ae', 'anr', 'wk0',
-                                 'wk', 'we', 'swk', 'swe', 'xk',
-                                 'ide', 'de', 'ws', 'emin', 'emax'])
+IonData = namedtuple('IonData',
+                     ['ddir', 'sdir', 'ps0', 'ds0', 'rd', 'r',
+                      'ir0', 'ir1', 'idx', 'egy', 'ai', 'ev', 'av',
+                      'ad', 'zai','z', 'k', 'ns', 'nm', 'kmin', 'kmax',
+                      'an', 'ae', 'anr', 'wk0', 'wk', 'we', 'swk', 'swe',
+                      'xk', 'ide', 'de', 'ws', 'emin', 'emax',
+                      'df', 'lzd', 'tgt', 'lzf', 'lznd', 'ga'])
 """Ion radiative cascade data container
 ddir: data directory containing the FAC atomic data
 sdir: spectral directory containing the cascade mode from the crm run
@@ -155,7 +159,7 @@ def eb_tr(p, ddir='data', cnv=1):
         return egy,tr0,d,r
     tr1 = zeros((m,m))
     ntr1 = zeros(m)
-    b = loadtxt('%s/%s.bas'%(ddir,p), unpack=1)
+    b = loadtxt('%s/%s.bas'%(ddir,p), unpack=1, ndmin=2)
     c = []
     pb = []
     mb = []
@@ -227,10 +231,10 @@ def eb_cas(z, k, p, emin, emax, ddir='data'):
     ai = matmul(diag(-tr[i0,i1]),tri[i1-1])
     return (egy, i0, i1, tri, tr, ai)
 
-def cs_cx(z, k, n, sdir='spec'):
+def cs_cx(z, k, n, nk='', sdir='spec'):
     a = fac.ATOMICSYMBOL[z]    
-    f = sdir+'/%s%02da.r7'%(a,k)
-    r1 = loadtxt(f, unpack=1)
+    f = sdir+'/%s%02d%sa.r7'%(a,k,nk)
+    r1 = loadtxt(f, unpack=1, ndmin=2)
     i1 = int32(r1[2])
     n1 = 1+max(i1)
     if n1 < n:
@@ -239,48 +243,51 @@ def cs_cx(z, k, n, sdir='spec'):
     c1[i1] = r1[3]
     return c1
 
-def eb_cx(z, k, ip, ddir='data', sdir='spec'):
+def eb_cx(z, k, ip0, np, nk='', ddir='data', sdir='spec'):
     a = fac.ATOMICSYMBOL[z]
     p = '%s%02d'%(a,k)
     f = ddir+'/%sa.en'%p
     r = rfac.FLEV(f)
-    f0 = ddir+'/%sF%02da.bas'%(p,ip)
-    r0 = loadtxt(f0, unpack=1)
     w = where(abs(r.j-r.j[0])%2 == 1)
     w = w[0]
-    c1 = cs_cx(z, k, w, sdir=sdir)
-    h1,r1 = rfac.read_enf('%s/%sF%02da.en'%(ddir,p,ip))
+    c1 = cs_cx(z, k, w, nk=nk, sdir=sdir)
+    #w = where(r.v%100 > 2)
+    #c1[w] = 0.0
+    for ip in range(ip0, ip0+np):
+        f0 = ddir+'/%sF%02da.bas'%(p,ip)
+        print(f0)
+        r0 = loadtxt(f0, unpack=1, ndmin=2)
+        h1,r1 = rfac.read_enf('%s/%sF%02da.en'%(ddir,p,ip))
     
-    i = int32(r0[0])
-    j = int32(r0[1])
-    m = int32(r0[2])
-    b = r0[3]
-    n = 1+max(i)
-    c = zeros(n)
-    c2 = zeros(len(c1))
-    for ib in range(len(r1)):
-        i0 = r1[ib]['ilev'][0]
-        i1 = r1[ib]['ilev'][-1]
-        ni = i1-i0+1
-        w = where((i >= i0)&(i <= i1))
-        ix = (i[w]-min(i[w]))*1000000 + (j[w]-min(j[w]))*100 + (max(m[w])+m[w])
-        sx = argsort(ix)
-        ci = (b[w][sx]).reshape((ni,ni))
-        ct = transpose(ci)
-        pb = j[w][sx]
-        mb = m[w][sx]
-        cm = c1[pb[:ni]]/(r.j[pb[:ni]]+1.0)
-        c[i0:i1+1] = matmul(ci*ci, cm)
-        ck = matmul(ct*ct, c[i0:i1+1])
-        for t in range(ni):
-            c2[pb[t]] += ck[t]
-    return c,c1,c2
-"""
-    for k in range(n):
-        w = where(i == k)
-        c[k] = sum(c1[j[w]]*b[w]**2/(r.j[j[w]]+1.0))
-    return c,c1
-"""
+        i = int32(r0[0])
+        j = int32(r0[1])
+        m = int32(r0[2])
+        b = r0[3]
+        n = 1+max(i)
+        c = zeros(n)
+        c2 = zeros(len(c1))
+        for ib in range(len(r1)):
+            i0 = r1[ib]['ilev'][0]
+            i1 = r1[ib]['ilev'][-1]
+            ni = i1-i0+1
+            w = where((i >= i0)&(i <= i1))
+            ix = (i[w]-min(i[w]))*1000000 + (j[w]-min(j[w]))*100 + (max(m[w])+m[w])
+            sx = argsort(ix)
+            ci = (b[w][sx]).reshape((ni,ni))
+            ct = transpose(ci)
+            pb = j[w][sx]
+            mb = m[w][sx]
+            cm = c1[pb[:ni]]/(r.j[pb[:ni]]+1.0)
+            c[i0:i1+1] = matmul(ci*ci, cm)
+            ck = matmul(ct*ct, c[i0:i1+1])
+            for t in range(ni):
+                c2[pb[t]] += ck[t]
+        if ip == ip0:
+            ac0 = zeros((np,n))
+            ac2 = zeros((np,len(c1)))
+        ac0[ip-ip0] = c
+        ac2[ip-ip0] = c2
+    return ac0,c1,ac2
 
 def rad_cas(z, k, emin, emax, nmin=0, nmax=100,
             ist='', ddir='data', sdir='spec', pf=''):
@@ -323,13 +330,13 @@ def rad_cas(z, k, emin, emax, nmin=0, nmax=100,
     w = []
     if k == 1:
         tpr = crm.TwoPhoton(z, 0)
-        w = where(rd.n == b'2s+1(1)1')
+        w = where(rd.n == '2s+1(1)1')
     elif k == 2:
         tpr = crm.TwoPhoton(z, 1)
-        w = where(rd.n == b'1s+1(1)1.2s+1(1)0')
+        w = where(rd.n == '1s+1(1)1.2s+1(1)0')
     elif k == 4:
         tpr = crm.TwoPhoton(z, 2)
-        w = where(rd.n == b'2s+1(1)1.2p-1(1)0')
+        w = where(rd.n == '2s+1(1)1.2p-1(1)0')
     if len(w) == 1:        
         w = w[0]
         if len(w) == 1:
@@ -372,13 +379,13 @@ def eb_trm(z, k, nf=20, e0=2.0, e1=8.0, ddir='data'):
     w = []
     if k == 1:
         tpr = crm.TwoPhoton(z, 0)
-        w = where(rd.n == b'2s+1(1)1')
+        w = where(rd.n == '2s+1(1)1')
     elif k == 2:
         tpr = crm.TwoPhoton(z, 1)
-        w = where(rd.n == b'1s+1(1)1.2s+1(1)0')
+        w = where(rd.n == '1s+1(1)1.2s+1(1)0')
     elif k == 4:
         tpr = crm.TwoPhoton(z, 2)
-        w = where(rd.n == b'2s+1(1)1.2p-1(1)0')
+        w = where(rd.n == '2s+1(1)1.2p-1(1)0')
     itp = -1
     if len(w) == 1:        
         w = w[0]
@@ -387,7 +394,7 @@ def eb_trm(z, k, nf=20, e0=2.0, e1=8.0, ddir='data'):
     for i in range(nf):
         p = '%s%02dF%02da'%(a,k,i)
         print(p)
-        eg,t0,t1,d,r = eb_tr(p)
+        eg,t0,t1,d,r = eb_tr(p, ddir=ddir)
         n = len(t1[0])
         for j in range(n):
             t1[j,j] = -sum(t1[:j,j])
@@ -396,10 +403,38 @@ def eb_trm(z, k, nf=20, e0=2.0, e1=8.0, ddir='data'):
             trm = zeros((nf,n,n))
         trm[i] = -t1
     return es,trm
-            
-def int_rate(es,trm,y0,mt=10.0,ntm=50000,method='Radau',
+
+def interp_cs(es, cs, rx):
+    ef = log(12.4e3*1e-8/(2*pi*137.0*(rx*0.53e-8)**2))
+    loges = log(es)
+    dloges = loges[1]-loges[0]        
+    if (ef <= loges[0]):
+        a = cs[0]
+    elif (ef >= loges[-1]):
+        a = cs[-1]
+    else:
+        j = int((ef-loges[0])/dloges)
+        w = j+1
+        f = (ef-loges[j])/dloges
+        print([j,w,f])
+        a = cs[j]*(1-f) + cs[w]*f
+    return a
+
+def lzrx(lzf):
+    with open(lzf) as f:
+        r = f.readlines(2000)
+        d = loadtxt(lzf, unpack=1)
+        rx = array([float(x) for x in r[11][11:-1].split()])
+        rx = matmul(transpose(d[1:-1]),rx)/sum(d[1:-1],0)
+        return d[0],rx
+    
+def int_rate(es, trm, y0i, ecx=0,
+             mt=10.0,ntm=50000,method='Radau',
              rx=20.0, eu=10.0):
-    n = len(y0)
+    if ecx == 1:
+        n = len(y0i[0])
+    else:
+        n = len(y0i)
     i = arange(n)
     r0 = min(trm[0,i,i][1:])
     r1 = max(trm[-1,i,i][1:])
@@ -414,7 +449,6 @@ def int_rate(es,trm,y0,mt=10.0,ntm=50000,method='Radau',
     t1 = ta[-1]
     emax = 12.4e3*1e-8/(2*pi*137.0*(rx*0.53e-8)**2)
     xt = 1e10*ebit.e2v(eu,1.0)/(rx*0.53e-8)
-    print([t1,emax/1e6,xt/1e12])
     loges = log(es)
     dloges = loges[1]-loges[0]
     def fd(t,y):
@@ -429,6 +463,19 @@ def int_rate(es,trm,y0,mt=10.0,ntm=50000,method='Radau',
             f = (ef-loges[j])/dloges
             a = trm[j]*(1-f) + trm[w]*f
         return -matmul(a,y)
+    if ecx > 0:
+        ef = log(emax)
+        if (ef <= loges[0]):
+            y0 = y0i[0]
+        elif (ef >= loges[-1]):
+            y0 = y0i[-1]
+        else:
+            j = int((ef-loges[0])/dloges)
+            w = j+1
+            f = (ef-loges[j])/dloges
+            y0 = y0i[j]*(1-f) + y0i[w]*f
+    else:
+        y0 = y0i
     sf = integrate.solve_ivp(fd, [0.0,t1], y0, t_eval=ta, method=method)
     return sf
 
@@ -458,7 +505,106 @@ def int_lines(r,sf,es,trm,rx=20.0,eu=10.0):
         s = s + y*dt*(-a[r.ir0,r.ir1])
     return s
 
-def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-1):
+def ssp_basis(z, k, emin, emax, n0, n1, kmax, neu, eus0, eus1, fsav,
+              ddir='data', sdir='spec', r=None, es=[], trm=[], sw=0,
+              tgt='H', ecx=0,
+              rxf=1.0,
+              lzd='/Users/yul20/src/Kronos_v3.1/CXDatabase/Projectile_Ions'):
+    if r == None:
+        r = rad_cas(z, k, emin, emax, pf='F10', ddir=ddir, sdir=sdir)
+    ne = len(r.egy)
+    ys = zeros((neu,n1+1,kmax+1,ne))
+    nlev = len(r.trm[0])
+    if len(es)==0 or len(trm)==0:
+        es, trm = eb_trm(z, k, ddir=ddir)
+    deu = (log(eus1)-log(eus0))/(neu-1)
+    eus = exp(arange(log(eus0), log(eus1)+0.1*deu, deu))
+    a = fac.ATOMICSYMBOL[z]
+    lzf = '%s/%s/Charge/%2d/Targets/%s/%s%2d+%s_sec_faclz_nres.cs'%(lzd,a,z,tgt,a.lower(),z,tgt.lower())
+    print(lzf)
+    rxe,rxv = lzrx(lzf)
+    rxi = interpolate.interp1d(log(rxe), rxv*rxf,
+                               bounds_error=False, fill_value='extrapolate')
+    reu = rxi(log(eus))
+    for n in range(n0,n1+1):
+        for km in range(min(n,kmax+1)):
+            if ecx == 0:
+                if sw == 0:
+                    cs = cs_cx(z, k, nlev,
+                               nk='n%02dk%02d'%(n,km), sdir=sdir)
+                else:
+                    cs = cs_cx(z, k, nlev,
+                               nk='n%d%02dk%02d'%(sw,n,km), sdir=sdir)
+            else:
+                if sw == 0:
+                    cs0,cs1,cs = eb_cx(z, k, 0, len(es),
+                                       nk='n%02dk%02d'%(n,km), sdir=sdir)
+                else:
+                    cs0,cs1,cs = eb_cx(z, k, 0, len(es),
+                                       nk='n%d%02dk%02d'%(sw,n,km), sdir=sdir)
+
+            for ie in range(neu):
+                print([n,km,ie,eus[ie],reu[ie]])
+                sys.stdout.flush()
+                sf = int_rate(es, trm, cs, ecx=ecx, rx=reu[ie], eu=eus[ie])
+                ys[ie,n,km] = int_lines(r, sf, es, trm, rx=reu[ie], eu=eus[ie])
+    if fsav != '':
+        with open(fsav, 'wb') as f:
+            pickle.dump((es,trm,eus,r,ys), f)
+
+def load_basis(f):
+    with open(f, 'rb') as fs:
+        return pickle.load(fs)
+    
+def mavg_basis(f0, f1, nt, t0, t1):
+    with open(f0,'rb') as f:
+        es,trm,eus,r,ys = pickle.load(f)
+    dt = (log(t1)-log(t0))/(nt-1)
+    ts = exp(arange(log(t0), log(t1)+0.1*dt, dt))
+    ss = ys.shape
+    ys = ys.reshape((ss[0],ss[1]*ss[2]*ss[3]))
+    n1 = 8
+    eus1 = zeros(ss[0]+n1)
+    ys1 = zeros((ss[0]+n1,len(ys[0])))
+    ys1[:ss[0],:] = ys
+    eus1[:ss[0]] = eus
+    for i in range(ss[0],len(eus1)):
+        eus1[i] = eus1[i-1]*(eus[1]/eus[0])
+    for i in range(len(ys[0])):
+        fi = interpolate.interp1d(log(eus),ys[:,i],
+                                  fill_value='extrapolate', bounds_error=False)
+        ys1[ss[0]:,i] = fi(log(eus1[ss[0]:]))
+    wt = zeros((nt,ss[0]+n1))
+    for i in range(nt):
+        t = ts[i]
+        x = eus1/t
+        dx = log(x[1])-log(x[0])
+        wt[i] = 1.12838*sqrt(x)*exp(-x)*x*dx
+    yt = matmul(wt, ys1).reshape((nt,ss[1],ss[2],ss[3]))
+    with open(f1, 'wb') as f:
+        pickle.dump((es,trm,ts,r,yt), f)
+    return ts, yt
+
+def pick_lines(idx, ai, egy, de, eps):
+    w = where(idx >= 0)
+    ir0 = w[0]
+    ir1 = w[1]
+    nw = len(ir0)
+    iz = repeat(False, nw)
+    for i in range(0,nw):
+        ix = idx[ir0[i],ir1[i]]
+        e = egy[ix]
+        k = where(abs(egy-e) <= de)
+        k = k[0]
+        if ((ai[:,ix,:] > eps*nanmax(ai[:,k,:],1)).any()):
+            iz[ix] = True
+    return (where(iz))[0]    
+        
+def ion_data(z, k, ns, ws0, emin, emax,
+             ddir='data', sdir='spec', df='',
+             kmin=0, kmax=-1, pwi=6.0, pth=0.0,
+             lzd='/Users/yul20/src/Kronos_v3.1/CXDatabase/Projectile_Ions',
+             tgt=''):
     """cascade data
     z: atomic number
     k: number of electrons
@@ -482,18 +628,38 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
         fn = ds0 + 'a.en'
         rd = rfac.FLEV(ds0+'a.en')
         fn = ps0+'a.r1'
-        r = rcs(fn)
-        ir0 = int32(r[2])
-        ir1 = int32(r[1])
-        im = 1 + max(ir1)
-        idx = zeros((im,im), dtype=int32)
-        egy = rd.e[ir1] - rd.e[ir0]
-        w = where(logical_and(egy > emin, egy < emax))
-        ir0 = ir0[w]
-        ir1 = ir1[w]
-        egy = egy[w]
-        idx[:,:] = -1
-        idx[ir0,ir1] = arange(len(ir0), dtype=int32)
+        r = rcs(fn)            
+        if df == '':
+            ir0 = int32(r[2])
+            ir1 = int32(r[1])
+            im = 1 + max(ir1)
+            ttr = zeros((im,im))
+            ttr[ir0,ir1] = r[3]
+            ga = sum(ttr,0)*3.29e-16
+            idx = zeros((im,im), dtype=int32)
+            egy = rd.e[ir1] - rd.e[ir0]
+            w = where(logical_and(egy > emin, egy < emax))
+            ir0 = ir0[w]
+            ir1 = ir1[w]
+            egy = egy[w]
+            idx[:,:] = -1
+            idx[ir0,ir1] = arange(len(ir0), dtype=int32)
+        else:
+            with open(df, 'rb') as fs:
+                es,trm,eus,rs,ys = pickle.load(fs)
+                im = len(trm[0,0])
+                ga = 3.29e-16*diag(rs.trm)
+                egy = rs.egy
+                w = where((egy>emin)&(egy<emax))
+                w = w[0]
+                egy = egy[w]
+                ir0 = rs.ir0[w]
+                ir1 = rs.ir1[w]
+                ys = ys[:,:,:,w]
+                idx = zeros((im,im), dtype=int32)
+                idx[:,:] = -1
+                idx[ir0,ir1] = arange(len(ir0), dtype=int32)
+                ev = list(eus)
     else:
         ds0 = ''
         rd = None
@@ -511,6 +677,7 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
         idx = zeros((im,im),dtype=int32)
         idx[:,:] = -1
         idx[ir0,ir1] = arange(len(ir0), dtype=int32)
+        ga = zeros(im)
     nt = len(ir0)
     nn = len(ns)
     nm = int(mean(ns))
@@ -525,6 +692,15 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
     nm = kmax-kmin+1
     xk = arange(nm)+kmin
     ai = zeros((nn, nt, nm))
+    iv = 0
+    ev = []
+    av = []
+    if (df != ''):
+        ev = list(eus)
+        iv = where(eus >= 4.5)
+        iv = iv[0][0]
+        for i in range(len(ev)):
+            av.append(zeros((nn,nt,nm)))
     ad = zeros((nn, nm, im))
     zai = zeros(nm, dtype=int32)
     zai[:] = 1
@@ -545,13 +721,19 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
                         ps = ps0
                     else:
                         ps = '%s%s%02dk%02d'%(ps0, nc, (ws*100+n), kk)
-                    ofn = ps + 'a.ln'
-                    d = rcs(ofn)
-                    if len(d) == 0:
-                        wzai[ki] = 1
-                        continue
-                    it0 = atleast_1d(int32(d[1]))
-                    it1 = atleast_1d(int32(d[2]))
+                    if df == '':
+                        ofn = ps + 'a.ln'
+                        d = rcs(ofn)
+                        if len(d) == 0:
+                            wzai[ki] = 1
+                            continue
+                        it0 = atleast_1d(int32(d[1]))
+                        it1 = atleast_1d(int32(d[2]))
+                        si = atleast_1d(d[6]).copy()
+                    else:
+                        it0 = ir0
+                        it1 = ir1
+                        si = atleast_1d(ys[iv,n,kk]).copy()
                     if n == 0:
                         ofn = ps + 'a.r3'
                     else:
@@ -565,15 +747,35 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
                 else:
                     it0 = ir0
                     it1 = ir1
-                si = atleast_1d(d[6]).copy()
-                if (k == 0):
+                    si = atleast_1d(d[6]).copy()
                     si[:ki] = 0.0
                     si[ki+1:] = 0.0
                 ix = idx[it0, it1]
                 w = where(ix >= 0)
                 ix = ix[w]
                 ai[i,ix,ki] += si[w]
+                for ii in range(len(ev)):
+                    av[ii][i,ix,ki] += ys[ii,n,kk][w]
         zai = logical_and(zai, wzai)
+
+    if pth <= 0:
+        if k < 3:
+            pth = 2e-2
+        else:
+            pth = 6e-2
+    nl0 = len(egy)
+    if pwi > 0:
+        w = pick_lines(idx, ai, egy, pwi, pth)
+        egy = egy[w]
+        ir0 = ir0[w]
+        ir1 = ir1[w]
+        ai = ai[:,w,:]
+        for ii in range(len(ev)):
+            av[ii] = av[ii][:,w,:]
+    
+    print([df,k,len(egy),nl0,len(ev),iv,pwi,pth])
+    idx[:,:] = -1
+    idx[ir0,ir1] = arange(len(ir0), dtype=int32)
     an = zeros(nn+1)
     ae = zeros(nn+1)
     wk0 = fac.LandauZenerLD(z, nm, 5)
@@ -587,8 +789,24 @@ def ion_data(z, k, ns, ws0, emin, emax, ddir='data', sdir='spec', kmin=0, kmax=-
     swe = zeros(nm)
     ide = zeros(nt, dtype=int8)
     de = zeros(nt)
-
-    return IonData(ddir, sdir, ps0, ds0, rd, r, ir0, ir1, idx, egy, ai, ad, zai, z, k, ns, nm, kmin, kmax, an, ae, an.copy(), wk0, wk, we, swk, swe, xk, ide, de, ws0, emin, emax)
+    if lzd != '' and tgt != '':
+        z1 = z-k+1
+        a1 = fac.ATOMICSYMBOL[z1]
+        lzf = '%s/%s/Charge/%2d/Targets/%s/%s%2d+%s_sec_faclz_nres.cs'%(lzd,a1,z1,tgt,a1.lower(),z1,tgt.lower())
+        rz = loadtxt(lzf, unpack=1)
+        nr,nx = rz.shape
+        lznd = zeros((nn+1,nx))
+        lznd[0] = log10(rz[0])
+        for ii in range(nn):
+            j = ns[ii]+1
+            lznd[ii+1] = rz[-j]
+        wcs = 1/sum(lznd[1:,],0)
+        lznd[1:,] = matmul(lznd[1:,], diag(wcs))
+    else:
+        lzf = ''
+        lznd = None
+    
+    return IonData(ddir, sdir, ps0, ds0, rd, r, ir0, ir1, idx, egy, ai, ev, av, ad, zai, z, k, ns, nm, kmin, kmax, an, ae, an.copy(), wk0, wk, we, swk, swe, xk, ide, de, ws0, emin, emax, df, lzd, tgt, lzf, lznd, ga)
 
 def escape_peak(x, beta, gamma):
     xx = (x+beta)/(1.41421356*gamma)
@@ -731,12 +949,40 @@ def voigt(alpha, x):
         
     return H;
 
+gfxy = []
+vfxy = []
+dga = 0.5/5000
+aga = arange(0.0,0.5+0.1*dga,dga)
+def prep_gprof():
+    x = arange(-15.0,1e-5,0.02)
+    y = exp(-0.5*x*x)
+    y = cumsum(y)
+    y = log(y*0.5/y[-1])
+    fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
+    gfxy.append(fxy)
+    
+def prep_vprof():
+    for ig in range(len(aga)):
+        x = arange(-15.0,1e-5,0.02)
+        a = aga[ig]
+        y = voigt(a, x)
+        y = cumsum(y)
+        y = log(y*0.5/y[-1])
+        fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
+        vfxy.append(fxy)
+        
 def response(d, s, sig, es=[], eip=[]):
-    if len(eip) > 1 and eip[-1] < 0:
+    msp = int(s.stype/100)
+    vmd = 0
+    if len(eip) > 0 and eip[-1] < 0:
         sig0 = sig.copy()
         eip0 = eip.copy()
-        eip = eip[:-1];
-        sig = sig[:-1];
+        vmd = int(-eip[-1]+0.1)
+        eip = eip[:-1]
+        if vmd < 30:
+            sig = sig[:-(vmd%10)]
+        else:
+            sig = sig[:-1]
     else:
         sig0 = sig
         eip0 = eip
@@ -767,11 +1013,12 @@ def response(d, s, sig, es=[], eip=[]):
     nst = len(sig)
     nei = (len(eip)+1)
     ns = int(0.01+nst/nei)
+    ga = d.ga[d.ir1]
     afxy = []
     afxy0 = []
     for ie in range(nei):
         isig = sig[ie*ns:ie*ns+ns]
-        if (ns > 2):
+        if (msp==2):
             gamma = isig[2]
             x = arange(-50.0/isig[1], 50.0*gamma, 0.025)
             y = escape_peak(x, isig[1], gamma)
@@ -788,43 +1035,54 @@ def response(d, s, sig, es=[], eip=[]):
             fxy0 = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
             afxy.append(fxy)
             afxy0.append(fxy0)
-        elif ns > 1:
-            x = arange(-15.0,1e-5,0.02)
-            y = voigt(isig[1], x)
-            y = cumsum(y)
-            y = log(y*0.5/y[-1])
-            fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
-            afxy.append(fxy)
-        elif ns == 1:
-            x = arange(-15.0,1e-5,0.02)
-            y = exp(-0.5*x*x)
-            y = cumsum(y)
-            y = log(y*0.5/y[-1])
-            fxy = interpolate.interp1d(x, y, kind='linear', bounds_error=False, fill_value = (y[0],y[-1]))
-            afxy.append(fxy)
-    def cprof(xx, ie):
-        fxy = afxy[ie]
-        if ns > 2:
-            fxy0 = afxy0[ie]
-            yy1 = exp(fxy(xx))
+        elif msp == 0:
+            if len(vfxy) == 0:
+                prep_vprof()
+            afxy = vfxy
+        elif msp == 1:
+            if len(gfxy) == 0:
+                prep_gprof()
+            afxy = gfxy
+
+    def cprof(xx, ie, a):
+        if msp == 1:
+            fxy = lambda x: exp(afxy[0](x))
+        elif msp == 0:
+            if a <= aga[0]:
+                fxy = lambda x: exp(afxy[0](x))
+            elif a >= aga[-1]:
+                fxy = lambda x: exp(afxy[-1](x))
+            else:
+                ig0 = int((a-aga[0])/dga)
+                ig1 = ig0+1
+                fg = (a-aga[ig0])/dga
+                fxy0 = afxy[ig0]
+                fxy1 = afxy[ig1]
+                fxy = lambda x: exp(fxy0(x))*(1-fg)+exp(fxy1(x))*fg
+        else:
+            fxy = lambda x: exp(afxy[ie](x))
+            
+        if msp == 2:
+            fxy0 = lambda x: exp(afxy0[ie](x))
+            yy1 = fxy(xx)
             w = xx <= 0
             w0 = where(w)[0]
             yy = zeros(len(xx))
             if len(w0) > 0:
-                yy[w0] = exp(fxy0(xx[w0]))
+                yy[w0] = fxy0(xx[w0])
                 w1 = where(logical_not(w))[0]
                 if len(w1) > 0:
-                    yy[w1] = 1-exp(fxy0(-xx[w1]))
+                    yy[w1] = 1-fxy0(-xx[w1])
             yy = (yy + sig[nei+1]*yy1)/(1+sig[nei+1])
             return yy
         w = xx <= 0
         w0 = where(w)[0]
         yy = zeros(len(xx))
         if len(w0) > 0:
-            yy[w0] = exp(fxy(xx[w0]))
+            yy[w0] = fxy(xx[w0])
         w1 = where(logical_not(w))[0]
         if len(w1) > 0:
-            yy[w1] = 1-exp(fxy(-xx[w1]))
+            yy[w1] = 1-fxy(-xx[w1])
         return yy
     
     nes = len(es)
@@ -839,18 +1097,103 @@ def response(d, s, sig, es=[], eip=[]):
                 if eip[ie]>e:
                     break
             esig = sig[ie*ns]
+            asig = sig[ie*ns+1]
+            if ns > 2:
+                ssig = sig[ie*ns+2]
+                if ns > 3:
+                    bsig = sig[ie*ns+3]
+                    csig = sig[ie*ns+4]
         else:
             ie = 0
             esig = sig[0]
-        if ns < 2:
+            asig = sig[1]
+            if ns > 2:
+                ssig = sig[2]
+                if ns > 3:
+                    bsig = sig[3]
+                    csig = sig[4]
+        if msp == 1:
             dhi = (ehi-e)/esig
             dlo = (elo-e)/esig
             w = where(logical_or(abs(dhi)<15,abs(dlo)<15))
-            ar[w,i] = cprof(dhi[w],ie)-cprof(dlo[w],ie)
-        else:
-            ar[:,i] = cprof((ehi-e)/esig,ie)-cprof((elo-e)/esig,ie)
+            if ns == 1:
+                ar[w,i] = cprof(dhi[w],ie,0.0)-cprof(dlo[w],ie,0.0)
+            else:
+                ar[w,i] = (1-ssig)*(cprof(dhi[w],ie,0.0)-cprof(dlo[w],ie,0.0))
+                dhi = (ehi-e)/(esig*asig)
+                dlo = (elo-e)/(esig*asig)
+                w = where((abs(dhi)<15)&(abs(dlo)<15))
+                ar[w,i] += ssig*(cprof(dhi[w],ie,0.0)-cprof(dlo[w],ie,0.0))
+        elif msp == 0:
+            a = (ga[i]+asig)/(1.41421*esig)
+            if ns == 2:
+                ar[:,i] = cprof((ehi-e)/esig,ie,a)-cprof((elo-e)/esig,ie,a)
+            else:
+                ar[:,i] = (1-bsig)*(cprof((ehi-e)/esig,ie,a)-cprof((elo-e)/esig,ie,a))
+                a /= ssig
+                esig *= ssig
+                ar[:,i] += bsig*(cprof((ehi-e)/esig,ie,a)-cprof((elo-e)/esig,ie,a))
+                xm = (0.5*(ehi+elo)-e)/esig
+                xs = 1+csig*xm*exp(-0.001*xm*xm)
+                wm = where(xs < 0.05)
+                xs[wm] = 0.05
+                ar[:,i] *= xs
                 
     aj = zeros((nn,nr,nm))
+    if (len(d.ev) > 0 and vmd > 0):
+        evs = sig0[-(vmd%10):]
+        if vmd < 20:
+            ev = 10**evs[0]
+            if ev <= d.ev[0]:
+                d.ai[:,:,:] = d.av[0][:,:,:]
+            elif ev >= d.ev[-1]:
+                d.ai[:,:,:] = d.av[-1][:,:,:]
+            else:
+                ie0 = int((log(ev)-log(d.ev[0]))/(log(d.ev[1])-log(d.ev[0])))
+                ie1 = ie0+1
+                fe = (log(ev)-log(d.ev[ie0]))/(log(d.ev[ie1])-log(d.ev[ie0]))
+                d.ai[:,:,:] = d.av[ie0]*(1-fe) + d.av[ie1]*fe
+            if vmd > 10:
+                ev0 = evs[0]
+                ev1 = ev0
+                if vmd > 11:
+                    ev0 = evs[1]
+                    ev1 = ev0
+                    if vmd > 12:
+                        ev1 = evs[2]
+                if d.k == 1:
+                    ev = ev0
+                else:
+                    ev = ev1
+                if ev <= d.lznd[0][0]:
+                    d.an[:-1] = d.lznd[1:,0]
+                elif ev >= d.lznd[0][-1]:
+                    d.an[:-1] = d.lznd[1:,-1]
+                else:
+                    ie0 = int((ev-d.lznd[0][0])/(d.lznd[0][1]-d.lznd[0][0]))
+                    ie1 = ie0+1
+                    fe = (ev-d.lznd[0][ie0])/(d.lznd[0][ie1]-d.lznd[0][ie0])
+                    d.an[:-1] = d.lznd[1:,ie0]*(1-fe) + d.lznd[1:,ie1]*fe
+                    d.an[:-1] /= sum(d.an[:-1])
+        elif vmd > 20:
+            e0 = 10**evs[0]
+            a = 10**evs[1]
+            xe = 10**arange(-2.0,0.0,0.01)
+            ye = 1-xe**(1/a)
+            ye = ye/ye[0]
+            d.ai[:,:,:] = 0.0
+            for ie in range(1,len(xe)):
+                ev = e0*xe[ie]
+                if ev <= d.ev[0]:
+                    ai = d.av[0][:,:,:]
+                elif ev >= d.ev[-1]:
+                    ai = d.av[-1][:,:,:]
+                else:
+                    ie0 = int((log(ev)-log(d.ev[0]))/(log(d.ev[1])-log(d.ev[0])))
+                    ie1 = ie0+1
+                    fe = (log(ev)-log(d.ev[ie0]))/(log(d.ev[ie1])-log(d.ev[ie0]))
+                    ai = d.av[ie0][:,:,:]*(1-fe) + d.av[ie1][:,:,:]*fe
+                d.ai[:,:,:] += (ye[ie-1]-ye[ie])*ai
     for i in range(nn):
         aj[i] = matmul(ar, d.ai[i])
     return Response(sig0, es, eip0, bn, ar, aj)
@@ -865,7 +1208,7 @@ def calc_spec(d, r, ar=None):
             return y
         y,ar = calc_spec(d.ds[r], d.rs[r], ar)
         y *= d.sp.eff
-        if len(d.rs[r].eip) > 0 and d.rs[r].eip[-1] < 0:
+        if len(d.rs[r].eip) > 0 and d.rs[r].eip[-1] <= -30:
             xeff = -d.rs[r].eip[-1]
             w = where(d.sp.xm < xeff)
             y[w] *= d.sp.eff[w]**(d.rs[r].sig[-1])
@@ -878,16 +1221,19 @@ def calc_spec(d, r, ar=None):
     y = matmul(ar, d.wk)
     return (y,ar)
 
-def scale_spec(yd0, ye):
-    nd = len(yd0)
-    yd = zeros(nd)
-    yd[:] = yd0
+def scale_spec(xm, yd, ye):
     w = where(ye > 0)
-    eff = zeros(nd)
-    eff[:] = 1.0
-    eff[w] = yd[w]/(ye[w]*ye[w])
-    yd[w] = yd[w]*eff[w]
-    return (yd, eff)
+    eff = yd[w]/(ye[w]*ye[w])
+    xx = xm[w]
+    i = where(ye[w][1:-1] < 7.0)
+    eff[1+i[0]] = 0.0
+    i = where(eff > 0)
+    xx = xx[i]
+    eff = eff[i]
+    fi = interpolate.interp1d(xx, eff, bounds_error=False, fill_value=(eff[0],eff[-1]))
+    eff = fi(xm)
+    yc = yd*eff
+    return (yc, eff)
 
 def mcmc_cmp(z, m):
     np = len(z.mpa)
@@ -973,12 +1319,13 @@ def mcmc_avg(z, m, m1=-1, eps=-1e30, rmin=-1e30):
         if z.bf != None:
             yb = z.bf(z.sp, z.mpa[z.ib])
         z.ym[:] += yb*z.sp.eff
-    if len(z.rs[0].eip) > 0 and z.rs[0].eip[-1] < 0:
+    if len(z.rs[0].eip) > 0 and z.rs[0].eip[-1] <= -30:
         xeff = -z.rs[0].eip[-1]
         w = where(z.sp.xm < xeff)
         z.ym[w] *= z.sp.eff[w]**(z.rs[0].sig[-1])
         
-def read_spec(df, stype, er=[]):
+def read_spec(df, stype0, er=[]):
+    stype = stype0%100
     if type(df) == tuple:
         if stype == 0:
             elo, ehi, yd, ye = df
@@ -1077,8 +1424,8 @@ def read_spec(df, stype, er=[]):
             ye = ye/eff
             
     if stype < 3:
-        (yc,eff) = scale_spec(yd, ye)
-    return SpecData(df, stype, er, elo, ehi, 0.5*(elo+ehi), yc, yd, eff, ye, 0.5*(elo+ehi))
+        (yc,eff) = scale_spec(0.5*(elo+ehi), yd, ye)
+    return SpecData(df, stype0, er, elo, ehi, 0.5*(elo+ehi), yc, yd, eff, ye, 0.5*(elo+ehi))
 
 def load_ecf(ds, ecf):
     for d in ds:
@@ -1153,7 +1500,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
               es=[], wes=[], wb=[],
               wsig=[], sav=[], mps=[], nburn=0, nopt=0, sopt=0, fopt='',
               yb=1e-1, ecf='', ierr=[], emd=0, wreg=10.0,
-              sde=3.0, bkgd=([],None), eip=[], fixwk=[]):
+              sde0=100.0, sde1=0.25, sde2=1.0,
+              bkgd=([],None), eip=[], fixwk=[]):
     t0 = time.time()
     yd = sp.yc + yb
     wyg = where(yd >= 10)[0]
@@ -1282,12 +1630,12 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
     mp0 = zeros(np)
     mp1 = zeros(np)
     smp = zeros(np)
-    smp[:nsig] = 0.25*mp[:nsig]
+    smp[:nsig] = 0.25*abs(mp[:nsig])
     if nes > 0:
         smp[nsig:nrp] = 0.002*mp[nsig:nrp]
         for i in range(3,nes+1):
             smp[nsig+i] = 0.05*mp[nsig+i]
-    smp[nsb:nde1] = 1.0
+    smp[nsb:nde1] = 0.25
     smp[iid] = 0.25
     smp[ia[0]:ia[-1]] = 0.1*mp[ia[0]:ia[-1]]
     smp[iw[0]:iw[-1]] = 0.1*mp[iw[0]:iw[-1]]
@@ -1314,12 +1662,17 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
     for i in range(len(wsig)):
         mp0[i] = wsig[i][0]
         mp1[i] = wsig[i][1]
-    mp0[nsb:nde1] = -sde
-    mp1[nsb:nde1] = sde
     for ii in range(ni):
         if ds[ii].k == 0:
-            mp0[ide0[ii]:ide1[ii]] = -100.0
-            mp1[ide0[ii]:ide1[ii]] = 100.0
+            mp0[ide0[ii]:ide1[ii]] = -sde0
+            mp1[ide0[ii]:ide1[ii]] = sde0
+        elif ds[ii].k == 1:
+            mp0[ide0[ii]:ide1[ii]] = -sde1
+            mp1[ide0[ii]:ide1[ii]] = sde1
+        else:
+            mp0[ide0[ii]:ide1[ii]] = -sde2
+            mp1[ide0[ii]:ide1[ii]] = sde2
+            
     mp0[iid] = 0.0
     mp1[iid] = 1e31
     mp0[ia[0]:ia[-1]] = 0.0
@@ -1422,14 +1775,16 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
                     mp[iw[i]:iw[i+1]][:] = 0.0
                     mp[iw[i]:iw[i+1]][:nm] = wki[:nm]
         if len(fixnd) > 0:
-            for i in range(ni):
+            for i in range(ni):                
                 ii = fixnd[i]
                 if ii >= 0 and ii < ni:
                     wki = mp[ia[ii]:ia[ii+1]]
-                    mp[ia[i]:ia[i+1]] = 0.0
+                    #mp[ia[i]:ia[i+1]] = 0.0
                     mp[ia[i]:ia[i+1]] = wki
         ap[:,:,:] = 0.0
         for i in range(ni):
+            if len(eip) > 0 and eip[-1] < -10 and eip[-1] > -20:
+                mp[ia[i]:ia[i+1]] = ds[i].an[:-1]
             x = mp[ia[i]:ia[i+1]]
             for k in range(len(ds[i].ns)):
                 ap[i,:,iw0[i]:iw0[i+1]] += rs[i].aj[k]*x[k]*mp[iid[i]]
@@ -1451,7 +1806,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
             if len(bkgd) == 3:
                 iye[:] += (ybk*bkgd[2])**2
         iye[:] = sqrt(iye+(merr*yb)**2)
-        if len(eip) > 0 and eip[-1] < 0:
+        if len(eip) > 0 and eip[-1] <= -30:
             xeff = -eip[-1]            
             w = where(sp.xm < xeff)
             y[w] *= eff[w]**(mp[nsig-1])
@@ -1467,7 +1822,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
             w = where(yt0 <= ytm)
             yt0[w] = ytm[w]
             yt1 = yt + iye
-            w = where(logical_and(yd >= yt0, yd <= yt0))
+            w = where(logical_and(yd >= yt0, yd <= yt1))
             yt[w] = yd[w]
             w = where(yd > yt1)
             yt[w] = yt1[w]
@@ -1548,26 +1903,6 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
                 if wk[i] > wk[i-1]+0.01:
                     dr = (wk[i]-wk[i-1])*wreg
                     r -= dr*dr
-            """
-            w = where(ds[i].wk0 > 0)[0]
-            wk = wk[w]
-            wk0 = ds[i].wk0[w]
-            im = sum(wk0*ds[i].xk[w])/sum(wk0)
-            nk = len(wk)
-            if nk > 3 and ds[i].k > 0:
-                for j in range(nk-1, 0, -1):
-                    if wk[j] > 0 and wk[j-1]/wk[j] < wk0[j-1]/wk0[j]:
-                        break
-                if j > im:
-                    xj = j/im-1.0
-                    dr = xj*wreg
-                    r -= dr*dr
-                    j0 = max(1, j-1)
-                    for j in range(j0, nk):
-                        if wk[j] > wk0[j]:
-                            dr = xj*(wk[j]-wk0[j])*wreg
-                            r -= dr*dr
-            """
         return r
 
     def eqanorm(x, ii):
@@ -1664,8 +1999,8 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
                         rej=1
                 if not rej:
                     r0 = r
-                    hmp[i1,ip] = mp[ip]
-                    hmp[i1,jp] = mp[jp]
+                    #hmp[i1,ip] = mp[ip]
+                    #hmp[i1,jp] = mp[jp]
                     har[i, ip-idx[0],jp-idx[0]] = dp
                 trej += rp
                 nrej += 1
@@ -1778,7 +2113,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
                 mp[:] = xx0
                 r1 = lnlikely(0)
                 print('optimzie fail: %g %g %g'%(r0, r, r1))
-
+            sys.stdout.flush()
         trej = 0.0
         nrej = 0
         for ip in range(nde2):
@@ -1814,8 +2149,10 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
             nrej += 1
             
         for ii in range(ni):
-            if len(fixnd) > 0 and fixnd[ii] >= 0:
+            if len(eip) > 0 and eip[-1] < -10 and eip[-1] > -20:
                 continue
+            if len(fixnd) > 0 and fixnd[ii] >= 0:
+                continue            
             (r0,treja,nreja) = update_awp(0, r0, ia, sda, arej, hda)
             nrej += nreja
             trej += treja
@@ -1834,12 +2171,13 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
             im0 = max(i-100, 10)
             for ip in range(np):
                 if ip < nde2:
-                    fa = mean(rrej[im:i+1,ip])
-                    fa = fmp[ip]*((1-fa)/racc)**2
+                    ra = mean(rrej[im:i+1,ip])
+                    fa = fmp[ip]*((1-ra)/racc)**2
                     fa = min(fa, 1e2)
                     fa = max(fa, 1e-2)
                     fa = 0.25*fmp[ip]+0.75*fa
                 else:
+                    ra = 0.0
                     fa = 1.0
                 xst = fa*std(hmp[im0:i+1,ip])
                 fmp[ip] = fa
@@ -1913,6 +2251,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
                 pp.append(0.0)
         pp.append(time.time()-t0)
         print('imc: %6d %7.1E %7.1E %7.1E %7.1E %7.1E %12.5E %8.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %7.1E %10.4E'%tuple(pp))
+        sys.stdout.flush()
         savenow = False
         if i == imp-1:
             savenow = True
@@ -1923,6 +2262,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
             os.system('rm '+tsav)            
         if savenow:
             print('pickling: %s %10.3E'%(fsav, time.time()-t0))
+            sys.stdout.flush()
             if nsav > 0:
                 fs = open(fsav, 'wb')
             for ii in range(ni):
@@ -1939,6 +2279,7 @@ def mcmc_spec(ds, sp, sig, eth, imp, fixld=[], fixnd=[], racc=0.4,
             if nsav > 0:
                 pickle.dump(zi, fs)
                 fs.close()
+
     print('done: %10.3E'%(time.time()-t0))
     return zi
 
@@ -1979,7 +2320,13 @@ def mod_spec(z, df, stype, er=[]):
             iws = ws[i]
         else:
             iws = 0
-        zm.ds[i] = ion_data(z.ds[i].z, z.ds[i].k, z.ds[i].ns, ws, emin, emax, ddir=z.ds[i].ddir, sdir=z.ds[i].sdir, kmin=z.ds[i].kmin, kmax=z.ds[i].kmax)
+        ddir = z.ds[i].ddir.split(',')
+        if len(ddir) == 2:
+            dfn = ddir[1]
+        else:
+            dfn = ''
+        ddir = ddir[0]
+        zm.ds[i] = ion_data(z.ds[i].z, z.ds[i].k, z.ds[i].ns, ws, emin, emax, ddir=ddir, sdir=z.ds[i].sdir, kmin=z.ds[i].kmin, kmax=z.ds[i].kmax, df=dfn, tgt=z.ds[i].tgt)
         wde = where(z.ds[i].ide)[0]
         for j in range(len(wde)):
             ir0 = z.ds[i].ir0[wde[j]]
@@ -2001,8 +2348,9 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0, wes=[],
              wb=[], wsig=[], sav=[], mps=[], nburn=0.25,
              nopt=0, sopt=0, fopt='', yb=1e-1, ecf='',
              ddir='data', sdir='spec', wreg=100.0,
-             ierr=[], emd=0, sde=3.0, bkgd=([],None), eip=[],
-             fixwk=[]):
+             ierr=[], emd=0, sde0=100.0, sde1=0.25, sde2=1.0,
+             bkgd=([],None), eip=[],
+             fixwk=[], tgt=''):
     """driver for mcmc fit of cx spectra
     df: spectral data file
     z: atomic number
@@ -2069,12 +2417,21 @@ def fit_spec(df, z, ks, ns, ws, sig, eth, stype, es=[], aes=0, wes=[],
             nsi = ns[i]
         else:
             nsi = ns[-1]
-        di = ion_data(z, ki, nsi, iws, emin, emax, kmin=k0, kmax=k1, ddir=ddir, sdir=sdir)
+        df = ''
+        ddir1 = ddir
+        sdir1 = sdir
+        
+        if ki <= 2 and len(eip) > 0 and eip[-1] < 0 and eip[-1] > -30:
+            df = '%s%02d%sKL%d.pkl'%(fac.ATOMICSYMBOL[z],ki,tgt,iws)
+            #ddir1 = 'data1'
+            #sdir1 = 'spec1'                
+            
+        di = ion_data(z, ki, nsi, iws, emin, emax, kmin=k0, kmax=k1, ddir=ddir1, sdir=sdir1, df=df, tgt=tgt)
         ds.append(di)
-    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, es, wes, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, emd, wreg, sde, bkgd, eip, fixwk)
+    z = mcmc_spec(ds, s, sig, eth, nmc, fixld, fixnd, racc, es, wes, wb, wsig, sav, mps, nburn, nopt, sopt, fopt, yb, ecf, ierr, emd, wreg, sde0, sde1, sde2, bkgd, eip, fixwk)
     return z
 
-def plot_ldist(z, op=0, sav=''):
+def plot_ldist(z, op=0, sav='', k=0, ap=plt, marker='o', mkf='none', lst='-', dx=0.0,color='k'):
     ds = z.ds
     if not op:
         clf()
@@ -2083,22 +2440,35 @@ def plot_ldist(z, op=0, sav=''):
     for i in range(len(ds)):
         if ds[i].k == 0:
             continue
+        if k > 0 and ds[i].k != k:
+            continue
         ymin0 = min(ds[i].wk-ds[i].we)
         ymax0 = max(ds[i].wk+ds[i].we)
         ymin = min(ymin0, ymin)
         ymax = max(ymax0, ymax)
+        if k > 0 and ds[i].k == k:
+            break
+
     dy = 0.025*(ymax-ymin)
     ymin -= dy
     ymax += dy
-    ylim(ymin, ymax)
+    ap.set_ylim(ymin, ymax)
     ni = len(ds)
     for i in range(ni):
         d = ds[i]
         if d.k == 0:
             continue
-        errorbar(d.xk-(0.2/ni)*(i-ni/2), d.wk, yerr=d.we, marker='o', capsize=3)
-    xlabel('L')
-    ylabel('Fraction')
+        if k > 0 and ds[i].k != k:
+            continue
+        ap.errorbar(d.xk-(0.2/ni)*(i-ni/2)+dx, d.wk,
+                    yerr=d.we*1.5, marker=marker, capsize=1.5,
+                    linestyle='-', fillstyle=mkf,
+                    color=color, markersize=6.5, linewidth=0.5)
+        if k > 0 and ds[i].k == k:
+            break
+    if ap == plt:
+        xlabel('L')
+        ylabel('Fraction')
     if sav != '':
         savefig(sav)
     
@@ -2133,7 +2503,7 @@ def plot_idist(z, op=0, sav=''):
     if sav != '':
         savefig(sav)
     
-def plot_ndist(z, op=0, sav=''):
+def plot_ndist(z, op=0, sav='', k=0):
     ds = z.ds
     if not op:
         clf()
@@ -2142,23 +2512,30 @@ def plot_ndist(z, op=0, sav=''):
     ni = len(ds)
     for i in range(len(ds)):
         d = ds[i]
+        if k > 0 and ds[i].k != k:
+            continue
         y0 = d.an[:-1]
         e0 = d.ae[:-1]
         ymin0 = min(y0-e0)
         ymax0 = max(y0+e0)
         ymin = min(ymin0, ymin)
         ymax = max(ymax0, ymax)
+        if k > 0 and ds[i].k == k:
+            break
     dy = 0.025*(ymax-ymin)
     ymin -= dy
     ymax += dy
     ylim(ymin, ymax)
     for i in range(len(ds)):
+        if k > 0 and ds[i].k != k:
+            continue
         d = ds[i]
         x0 = array(d.ns)-(0.2/ni)*(i-ni/2)
         y0 = d.an[:-1]
         e0 = d.ae[:-1]
         errorbar(x0, y0, yerr=e0, marker='o', capsize=3)
-
+        if k > 0 and ds[i].k == k:
+            break
     xlabel('N')
     ylabel('Fraction')
     if sav != '':
@@ -2720,6 +3097,7 @@ def plot_kcx(z, sav='', xr=[0, 250]):
 def load_pkl(fn):
     f = open(fn,'rb')
     z = pickle.load(f)
+    mcmc_avg(z, min(1000,int(z.imp/2)))
     f.close()
     return z
 
@@ -2745,7 +3123,7 @@ def plot_ksp(z):
     plot_spec(z, xr=[7.8e3, 9.3e3], err=1, sav='fe+h2_spec_hn.pdf')
     plot_snk(z, sav='fe+h2_snk.pdf')
     
-def plot_kbs(z, i, sav='', xr=[[1e3,2.5e3],[6.5e3,9.5e3]]):    
+def plot_kbs(z, i, sav='', xr=[[2,2.35],[6.5,9.6]], lw=1):    
     x = z.sp.xm
     if len(xr) == 0:
         xr = [[x[0],x[-1]]]    
@@ -2755,7 +3133,7 @@ def plot_kbs(z, i, sav='', xr=[[1e3,2.5e3],[6.5e3,9.5e3]]):
     nn = d.ns[k]
     ks = ['s', 'p', 'd', 'f', 'g', 'h', 'i']
     y = r.aj[k]
-    if i == 1:
+    if i == 1 and len(z.rs) > 2:
         y = y + z.rs[2].aj[k]
     y = y/sum(y)
     y *= sum(z.sp.yc)
@@ -2766,41 +3144,838 @@ def plot_kbs(z, i, sav='', xr=[[1e3,2.5e3],[6.5e3,9.5e3]]):
     labs = []
     if len(r.eip) > 0:
         xe = r.eip[-1]
-        if xe < 0:
+        if xe <= -30:
             w = where(x < -xe)
             eff[w] *= eff[w]**(r.sig[-1])
     for j in range(len(d.wk)):
         y[:,j] *= eff
-    clf()
     nr = len(xr)
+
+    x = x/1e3
+    proj = fac.ATOMICSYMBOL[z.ds[0].z]
+    tgt = z.ds[0].tgt
+    f,a = plt.subplots(1,nr)
+    f.set_size_inches(8,6)
+    f.subplots_adjust(wspace=0)
     for ir in range(nr):
-        plt.subplot(1,nr,ir+1)        
-        dx = 0.04*(xr[ir][1]-xr[ir][0])
+        if i == 0:
+            dx = 0.02*(xr[ir][1]-xr[ir][0])
+        else:
+            dx = 0.04*(xr[ir][1]-xr[ir][0])
         for j in range(len(d.wk)):
-            plt.plot(x+dx*j, y[:,j]+j*dy)
-            labs.append('$%d%s$'%(nn,ks[j]))
+            if ir == 0:
+                a[ir].plot(x, y[:,j]+j*dy, linewidth=lw)
+            else:
+                a[ir].plot((x+dx*j), y[:,j]+j*dy, linewidth=lw)
+            labs.append(r'$%d%s\times%4.2f$'%(nn,ks[j], d.wk[j]))
             
         ys = (1+len(d.wk))*dy
         yc = z.sp.yc
-        plt.plot(x, ys+yc, color='k')
+        a[ir].plot(x, ys+yc, color='k', linewidth=lw)
         labs.append('total exp')
         if i == 0:
             y0,r0 = calc_spec(z, 0)
-            plt.plot(x, ys+y0, color='r')
+            a[ir].plot(x, ys+y0, color='r', linewidth=lw)
             if ir == 1:
-                plt.text(xr[ir][0]+0.3*(xr[ir][1]-xr[ir][0]),
-                         max(ys+yc)*0.9, 'H-Like')
+                a[ir].text((xr[ir][0]+0.3*(xr[ir][1]-xr[ir][0])),
+                         max(ys+yc)*0.9, proj+'+'+tgt+'  H-Like')
         else:
             y1,r1 = calc_spec(z, 1)
-            plt.plot(x, ys+y1, color='r')
+            if i == 1 and len(z.rs) > 2:
+                y2,r2 = calc_spec(z, 2)
+                y1 += y2                
+            a[ir].plot(x, ys+y1, color='r', linewidth=lw)
             if ir == 1:
-                plt.text(xr[ir][0]+0.3*(xr[ir][1]-xr[ir][0]),
-                         max(ys+yc)*0.9, 'He-Like') 
+                a[ir].text((xr[ir][0]+0.3*(xr[ir][1]-xr[ir][0])),
+                         max(ys+yc)*0.9, proj+'+'+tgt+'  He-Like') 
         labs.append('total mod')
-        plt.xlim(xr[ir][0], xr[ir][1])
-        plt.xlabel('Energy (eV)')
+        a[ir].set_xlim(xr[ir][0], xr[ir][1])
+        a[ir].set_xlabel('Energy (keV)')
         if ir == 0:
-            plt.ylabel('Counts')
-            plt.legend(labs)
+            a[ir].set_ylabel('Counts')
+            a[ir].legend(labs)         
+        if ir == 1:
+            a[ir].set_yticklabels([])   
     if sav != '':
         savefig(sav)
+
+def plot_hp(z, i, bins=25, xsc=0, xlab='', op=0):
+    if op == 0:
+        clf()
+    if (i >= 0):
+        y = z.hmp[int(z.imp/2):z.imp,i]
+    else:
+        y = z.ene[int(z.imp/2):z.imp]
+    h = histogram(y, bins=bins)
+    x = h[1][:-1]
+    if xsc == 0:
+        plot(x, h[0]/max(h[0]), drawstyle='steps')
+    elif xsc == 1:
+        semilogx(10**x, h[0]/max(h[0]), drawstyle='steps')
+    xlabel(xlab)
+
+def load_fecx(md):
+    ts = ['h2', 'h', 'n2', 'he']
+    zs = []
+    for t in ts:
+        if md == 0:
+            zs.append(load_pkl('kfe_%s.pkl'%t))
+        elif md == 1:
+            zs.append(load_pkl('nfe_%s.pkl'%t))
+        else:
+            zs.append(load_pkl('sfe_%s.pkl'%t))
+    return zs
+
+def plot_r01ce(zs, sav=''):
+    clf()
+    n = len(zs)
+    tb = zeros(n)
+    t0 = zeros(n)
+    t1 = zeros(n)
+    r = zeros(n)
+    re = zeros(n)
+    for i in range(n):
+        ice = len(zs[i].rs[0].sig)-1
+        tb[i] = 10**zs[i].mpa[ice]
+        t0[i] = 10**(zs[i].mpa[ice]-zs[i].mpe[ice])
+        t1[i] = 10**(zs[i].mpa[ice]+zs[i].mpe[ice])
+        r[i] = zs[i].ds[0].wk[0]/zs[i].ds[0].wk[1]
+        re[i] = sqrt((zs[i].ds[0].we[0]/zs[i].ds[0].wk[0])**2 +
+                     (zs[i].ds[0].we[1]/zs[i].ds[0].wk[1])**2) * r[i]
+    errorbar(tb, r, yerr=re, xerr=[tb-t0, t1-tb], marker='o', capsize=3, fmt=' ')
+    xscale('log')
+    yscale('linear')
+    xlim(0.1, 10)
+    ylim(3, 13)
+    xlabel('Collision Energy (eV)')
+    ylabel('s/p ratio')
+    if sav != '':
+        savefig(sav)
+    return tb,t0,t1,r,re
+        
+def plot_ce(zs, alab=[], sav=''):
+    labs = []
+    for z in zs:
+        ice = len(z.rs[0].sig)-1
+        proj = fac.ATOMICSYMBOL[z.ds[0].z]
+        tgt = z.ds[0].tgt
+        op = len(labs) > 0
+        plot_hp(z, ice, xsc=1, op=op, xlab='Collision Energy (eV)')
+        labs.append(proj+'+'+tgt)
+    for i in range(len(alab)):
+        labs[i] = labs[i] + ' ' + alab[i]
+    legend(labs)
+    xlim(0.05,10)
+    ylabel('Probability (arb. unit)')
+    if sav != '':
+        savefig(sav)
+
+def lznm1e(e, t, zs=range(5, 21), md=0, src='fac'):
+    r = zeros(len(zs))
+    for i in range(len(zs)):
+        lzf = lzfn(zs[i], t, src)
+        es,nm = lznm(lzf, md=md)
+        f = interpolate.interp1d(log(es), nm)
+        r[i] = f(log(e))
+    return zs, r
+
+def lznm(lzf, md=0):
+    d = loadtxt(lzf)
+    nx,nn = d.shape
+    nm = zeros(nx)
+    es = zeros(nx)
+    x = arange(nn-2,0,-1)
+    for i in range(nx):
+        y = d[i][1:-1]
+        m = argmax(y)
+        m0 = m-2
+        if m0 <= 0:
+            m0 = 0
+        es[i] = d[i][0]
+        if md == 0:
+            nm[i] = sum(y[m0:]*x[m0:])/sum(y[m0:])
+        else:
+            nm[i] = x[m]
+    return es,nm
+
+def lznd(lzf, e):
+    d = loadtxt(lzf, unpack=1)
+    nn,nx = d.shape
+    y = zeros(nn-2)
+    xe = log(e)
+    x = log(d[0])
+    
+    for i in range(nn-2):
+        f = interpolate.interp1d(x, d[-i-2],
+                                 bounds_error=False,
+                                 fill_value='extrapolate')
+        y[i] = f(xe)
+    return arange(nn-2)+1, y
+
+def plot_lzcmp(z, tgt, op=0,
+               lzd='/Users/yul20/src/Kronos_v3.1/CXDatabase/Projectile_Ions'):
+    if not op:
+        clf()
+    a = fac.ATOMICSYMBOL[z]
+    lzf0 = '%s/%s/Charge/%d/Targets/%s/%s%d+%s_sec_faclz_nres.cs'%(lzd,a,z,tgt,a.lower(),z,tgt.lower())
+    lzf1 = '%s/%s/Charge/%d/Targets/%s/%s%d+%s_sec_mclz_nres.cs'%(lzd,a,z,tgt,a.lower(),z,tgt.lower())
+    r0 = loadtxt(lzf0, unpack=1)
+    r1 = loadtxt(lzf1, unpack=1)
+    loglog(r0[0], r0[-1])
+    loglog(r1[0], r1[-1])
+
+def fit_ndist(z, i):
+    xn = array(list(z.ds[i].ns))
+    yn = z.ds[i].an[:-1]
+    ye = z.ds[i].ae[:-1]
+    m = argmax(yn)
+    m0 = m-1
+    if m0 < 0:
+        m0 = 0
+    ye = 2*ye/yn[m]
+    yn /= yn[m]
+    xn = xn[m0:]
+    yn = yn[m0:]
+    ye = ye[m0:]
+    ice = len(z.rs[0].sig)-1
+    def fitfun(x, p):
+        xm,ym = lznd(z.ds[i].lzf, 10**p)
+        k = int32(x-xm[0])
+        w = where((k>=0)&(k<len(xm)))
+        y = zeros(len(x))
+        y[w] = ym[k[w]]
+        return y/max(y)
+    e0 = z.mpa[ice]
+    de0 = z.mpe[ice]
+    d = {'xd': xn, 'yd':yn, 'ye':ye,
+         'mp':array([e0]),
+         'mp0':array([e0-100*de0]),
+         'mp1':array([e0+100*de0]),
+         'smp':array([0.1*de0]),
+         'ftp':0}
+    mcmc.mcmc(fitfun, d, 2000, npr=500)
+    """
+    popt,pcov = optimize.curve_fit(fitfun, xn, yn, sigma=ye,
+                                   bounds=(e0-100*de0,e0+100*de0))
+    """
+    
+    return (e0,de0,d['mpa'][0],d['mpe'][0],d)
+    
+def plot_cecmp(zs, op=0, sav=''):
+    if not op:
+        clf()
+    plt.rcParams.update({'font.size':13})
+    plt.rcParams.update({'text.usetex': False})
+    plt.subplots_adjust(bottom=0.15,left=0.15,right=0.95,top=0.95)
+    syms=['o', 'd', 's', '^']
+    cols=['r','g','b','m']
+    r1 = loadtxt('cendist.txt')
+    #r1 = transpose(array([fit_ndist(z, 0) for z in zs]))
+    #r2 = transpose(array([fit_ndist(z, 1) for z in zs]))
+    x = 10**r1[0]
+    dx0 = (x-10**(r1[0]-r1[1]))
+    dx1 = (10**(r1[0]+r1[1])-x)
+    y = 10**r1[2]
+    dy0 = 2*((y-10**(r1[2]-r1[3])))
+    dy1 = 2*((10**(r1[2]+r1[3])-y))
+    #z = 10**r2[2]
+    #dz0 = z-10**(r2[2]-r2[3])
+    #dz1 = 10**(r2[2]+r2[3])-z
+    labs = []
+    for i in range(len(x)):
+        a = fac.ATOMICSYMBOL[zs[i].ds[0].z]
+        tgt = zs[i].ds[0].tgt
+        errorbar([x[i]], [y[i]], xerr=([dx0[i]],[dx1[i]]), yerr=([dy0[i]],[dy1[i]]), marker=syms[i], capsize=3, fmt=' ', color=cols[i], markersize=8, fillstyle='none')
+        labs.append('%s+%s'%(a, tgt))
+        text(x[i]*1.15, y[i]/1.25, tgt)
+    #errorbar(x, z, xerr=(dx0,dx1), yerr=(dz0,dz1), marker='^', capsize=3, fmt=' ')
+    #legend(labs)
+    
+    xscale('log')
+    yscale('log')
+    #legend(['H-like', 'He-like'])
+    xlabel('Collision Energy from Cascade Model (eV/amu)')
+    ylabel('Collision Energy from n Distribution (eV/amu)')
+    emin = 0.1
+    emax = 10.0
+    xlim(emin,emax)
+    ylim(emin,emax)
+    plot([emin,emax],[emin,emax], color='k')
+    if sav:
+        savefig(sav)
+        
+def lzfn(z,tgt,md,
+         lzd='/Users/yul20/src/Kronos_v3.1/CXDatabase/Projectile_Ions'):
+    a = fac.ATOMICSYMBOL[z]
+    lzf = '%s/%s/Charge/%d/Targets/%s/%s%d+%s_sec_%slz_nres.cs'%(lzd,a,z,tgt,a.lower(),z,tgt.lower(),md)
+    return lzf
+
+def plot_nc(zs, k=1, op=0, sav='',
+            lzd='/Users/yul20/src/Kronos_v3.1/CXDatabase/Projectile_Ions'):
+    if not op:
+        clf()
+    k -= 1
+    z = zs[k].ds[k].z
+    a = fac.ATOMICSYMBOL[z]
+    cols = ['k','b','r','g','o']
+    labs = []
+    for i in range(len(zs)):
+        zi = zs[i]
+        proj = fac.ATOMICSYMBOL[zi.ds[k].z]
+        tgt = zi.ds[k].tgt
+        #lzf = '%s/%s/Charge/%2d/Targets/%s/%s%2d+%s_sec_faclz_nres.cs'%(lzd,a,z,tgt,a.lower(),z,tgt.lower())
+        lzf = zi.ds[k].lzf
+        print(lzf)
+        es,nm = lznm(lzf)
+        w = where((es>=0.05)&(es<=50))
+        semilogx(es[w], nm[w], color=cols[i])
+        labs.append(proj+'+'+tgt)
+    legend(labs)
+    for i in range(len(zs)):        
+        zi = zs[i]
+        ice = len(zi.rs[0].sig)-1
+        proj = fac.ATOMICSYMBOL[zi.ds[k].z]
+        tgt = zi.ds[k].tgt
+        eb = 10**(zi.mpa[ice])
+        e0 = 10**(zi.mpa[ice]-zi.mpe[ice])
+        e1 = 10**(zi.mpa[ice]+zi.mpe[ice])
+        xn = array(zi.ds[k].ns)
+        im0 = min(1000,int((0.5*zi.imp)))
+        ap = zi.hmp[im0:zi.imp,zi.ia[k]:zi.ia[k+1]]
+        xm = zeros(len(ap[:,0]))
+        for j in range(len(ap[:,0])):            
+            m = argmax(ap[j])
+            m0 = m-2
+            if m0 <= 0:
+                m0 = 0
+            xm[j] = sum(xn[m0:]*ap[j,m0:])/sum(ap[j,m0:])
+        xe = 2*std(xm)
+        xm = mean(xm)
+        errorbar([eb], [xm], xerr=([e0],[e1]), yerr=xe, linewidth=0.75,
+                 capsize=3, marker='o', fmt=' ', color=cols[i])
+    xlabel('Collision Energy (eV)')
+    if k == 0:
+        ylabel('H-like Mean Capture n')
+    else:
+        ylabel('He-like Mean Capture n')
+    if sav != '':
+        savefig(sav)
+        
+def plot_feld(zs, k=1, sav='', ap=plt, ileg=1):
+    labs = []
+    ymin = 1e30
+    ymax = -1e30
+    syms=['o','d','s','^']
+    lst=['-','dashed','dotted','-.']
+    dx = array([-0.3,-0.1,0.1,0.3])*0.65
+    cols = ['r','g','b','m']
+    i = 0
+    for z in zs:
+        proj = fac.ATOMICSYMBOL[z.ds[0].z]
+        tgt = z.ds[0].tgt
+        plot_ldist(z, k=k, op=1, ap=ap, marker=syms[i],
+                   lst=lst[i], dx=dx[i], color=cols[i])
+        labs.append(proj+'+'+tgt)
+        yr = ylim()
+        ymin = min(ymin,yr[0])
+        ymax = max(ymax,yr[1])
+        i=i+1
+    if ileg==1:
+        ap.legend(labs, fontsize='small')
+    ap.set_ylim(ymin, ymax)
+    if sav != '':
+        savefig(sav)
+
+def plot_feld_all(zn, zs):
+    plt.rcParams.update({'font.size':15})
+    plt.rcParams.update({'text.usetex': True})
+    f,a = plt.subplots(3,1)
+    a[0].text(-0.3, 0.85, '(a)')
+    a[1].text(-0.3, 0.85, '(b)')
+    a[2].text(-0.3, 0.85, '(c)')
+    f.set_size_inches(5,9)
+    f.subplots_adjust(hspace=0,wspace=0,bottom=0.15,left=0.17,top=0.95,right=0.95)
+    plot_feld(zn, k=1, ap=a[0],ileg=1)
+    plot_feld(zn, k=2, ap=a[1],ileg=0)
+    plot_feld(zs, k=1, ap=a[2],ileg=0)
+    a[0].tick_params(direction='in')
+    a[1].tick_params(direction='in')
+    a[0].set_xticks(range(6))
+    a[1].set_xticks(range(6))
+    a[2].set_xticks(range(6))
+    a[0].set_xticklabels([])
+    a[1].set_xticklabels([])
+    a[0].set_xlim(-0.5,5.5)
+    a[1].set_xlim(-0.5,5.5)
+    a[2].set_xlim(-0.5,5.5)
+    a[0].set_ylim(-0.05,0.95)
+    a[1].set_ylim(-0.05,0.95)
+    a[2].set_ylim(-0.05,0.95)
+    a[2].set_xlabel(r'Orbital Angular Momentum $\mathit{l}$')
+    a[1].set_ylabel(r'Capture Fraction')
+    savefig('figures/angular_momentum.eps')
+    
+def plot_fend(zs, k=1, sav=''):
+    labs = []
+    for z in zs:
+        proj = fac.ATOMICSYMBOL[z.ds[0].z]
+        tgt = z.ds[0].tgt
+        if k == 1:
+            tgt += '  H-Like'
+        elif k == 2:
+            tgt += '  He-Like'
+        op = len(labs) > 0
+        plot_ndist(z, k=k, op=op)
+        labs.append(proj+'+'+tgt)
+    legend(labs)
+    if sav != '':
+        savefig(sav)
+    
+def deme(z, r0 = 5e2,
+         e0=10.0, xmin=1e-3, alpha=0.0,
+         tgt='H', tmass=1.0,
+         lzd='/Users/yul20/src/Kronos_v3.1/CXDatabase/Projectile_Ions'):    
+    a = fac.ATOMICSYMBOL[z]
+    lzf='%s/%s/Charge/%2d/Targets/%s/%s%2d+%s_sec_faclz_nres.cs'%(lzd,a,z,tgt,a.lower(),z,tgt.lower())
+    r = loadtxt(lzf, unpack=1)
+    xe = r[0]
+    xs = r[-1]*sqrt(xe)
+    m1 = fac.ATOMICMASS[z]
+    g = (xe/e0)**alpha*(r0*sqrt(e0)/xs)*(m1*tmass)/(m1+tmass)**2
+    gi = interpolate.interp1d(log(xe/e0), log(g),
+                              bounds_error=False, fill_value='extrapolate')
+    x = 10**arange(log10(xmin), 0.0, 0.005)
+    lx = log(x)
+    gg = exp(gi(lx))
+    dlx = lx[1]-lx[0]
+    ef = cumsum(dlx/gg)
+    ef = ef[-1]-ef
+    y = 1.0/(x*gg)*exp(-ef)
+    ys = cumsum(y*x)
+    ys = (1-ys/ys[-1])
+    
+    return r,x*e0,gg,ef,y,ys
+
+def plot_hr(z, k, tgt, n, md=0, sw=0, kmax=5, op=0, sav='', ylog=0, yr=None):
+    if not op:
+        clf()
+        
+    plt.rcParams.update({'font.size':15})
+    plt.subplots_adjust(bottom=0.15, top=0.95, right=0.95)
+    a = fac.ATOMICSYMBOL[z]
+    fn = '%s%02d%sKL%d.pkl'%(a,k,tgt,sw)
+    es,trm,eus,r,ys = load_basis(fn)
+    if k == 1:
+        if md == 0:
+            w0 = where((r.ir0 == 0)&(r.ir1 < 4))
+            w1 = where((r.ir0 == 0)&(r.ir1 >= 4))
+            ylab = r'H-like $H=F_{>2}/F_2$'
+        elif md == 1:            
+            w0 = where((r.ir0 == 0)&(r.ir1<3))
+            w1 = where((r.ir0 == 0)&(r.ir1 == 3))
+            ylab = r'Ly$_{\alpha 1}$/Ly$_{\alpha 2}$'
+        elif md == 2:
+            w0 = where((r.ir0 == 0)&(r.ir1 == 3))
+            w1 = where((r.ir0 == 0)&(r.ir1 == 2))
+            ylab = r'2s-1s/Ly$_{\alpha 1}$'
+        elif md == 3:
+            w0 = where((r.ir0 == 0)&(r.ir1 == 3))
+            w1 = where((r.ir0 == 0)&(r.ir1 == 1))
+            ylab = r'2p-1s/Ly$_{\alpha 1}$'
+        else:
+            w1 = where((r.ir0 == 0)&(r.ir1<3))
+            w0 = where((r.ir0 == 0)&(r.ir1 == 3))
+            ylab = r'Ly$_{\alpha 2}$/Ly$_{\alpha 1}$'
+    else:
+        if md == 0:
+            w0 = where((r.ir0 == 0)&(r.ir1 < 7))
+            w1 = where((r.ir0 == 0)&(r.ir1 >= 7))
+            ylab = r'He-like $H=F_{>2}/F_2$'
+        elif md == 1:
+            w0 = where((r.ir0 == 0) & (r.ir1 == 6))
+            w1 = where((r.ir0 == 0) & (r.ir1 < 6))
+            ylab = r'He-like $G=(x+y+z)/w$'
+        elif md == 2:
+            w0 = where((r.ir0 == 0) & (r.ir1 > 1) & (r.ir1 < 6))
+            w1 = where((r.ir0 == 0) & (r.ir1 == 1))
+            ylab = r'He-like $R=z/(x+y)$'
+        elif md == 3:
+            w1 = where((r.ir0 == 0) & (r.ir1>6))
+            w0 = where((r.ir0 == 0)&(r.ir1==6))
+            ylab = r'He-like $H^{\prime}=F_{>2}/w$'
+        elif md == 4:
+            w0 = where((r.ir0 == 0) & (r.ir1 >= 6))
+            w1 = where((r.ir0 == 0) & (r.ir1 < 6))
+            ylab = r'$G^{\prime}=(x+y+z)/(w+F_{>2}$)'
+        elif md == 5:
+            w0 = where((r.ir0 == 0))
+            w1 = where((r.ir0 == 0) & (r.ir1 == 1))
+            ylab = r'z/tot'
+        elif md == 6:
+            w0 = where((r.ir0 == 0))
+            w1 = where((r.ir0 == 0) & (r.ir1 >= 7))
+            ylab = r'$F_{>2}/tot$'
+            
+    w0 = w0[0]
+    w1 = w1[0]
+    y0 = sum(ys[:,:,:,w0], 3)
+    y1 = sum(ys[:,:,:,w1], 3)
+    hr = y1.copy()
+    hr[:,:,:] = 0.0
+    w = where(y0 > 0)
+    hr[w] = y1[w]/y0[w]
+    labs = []
+    ss = ['s','p','d','f','g','h']
+    syms=['^','<','s','o','d','v']
+    cols = ['k','r','g','b','y','m']
+    for i in range(kmax+1):
+        if i%2 == 0:            
+            semilogx(eus, hr[:,n,i],color=cols[i], marker=syms[i])
+        else:
+            semilogx(eus, hr[:,n,i], color=cols[i], marker=syms[i], fillstyle='none')
+        labs.append('%d%s'%(n,ss[i]))
+    if ylog:
+        yscale('log')
+    if not yr is None:
+        ylim(yr)
+    legend(labs, fontsize='x-small')
+    xlabel('Relative Collision Energy (eV/amu)')
+    ylabel(ylab)
+        
+    if sav != '':
+        savefig(sav)
+
+def sum_hr(z, i, nr, ir, sn):
+    w1 = where(z.ds[i].ir0 == 0)[0]
+    wn = z.ds[i].an[:-1].copy()
+    if sn == 1:
+        m = argmax(wn)
+        wn[:] = 0.0
+        wn[m] = 1.0
+    elif sn > z.ds[i].ns[0]:
+        m = sn-z.ds[i].ns[0]
+        wn[:] = 0.0
+        wn[m] = 1.0
+        
+    r = 0.0
+    for j in range(len(nr)):
+        n = nr[j]
+        k = ir[j]
+        if n > 2:
+            nx = int32(z.ds[i].rd.v/100)
+            w = where((z.ds[i].ir0 == 0)&(nx[z.ds[i].ir1]==n))
+            r += matmul(transpose(sum(z.ds[i].ai[:,w[0],:],1)),wn)
+        else:
+            ir1 = [int(d) for d in str(k)]
+            w = z.ds[i].ir1 == ir1[0]
+            for i1 in range(1,len(ir1)):
+                w |= z.ds[i].ir1 == ir1[i1]
+            w = where(w & (z.ds[i].ir0 == 0))
+            r += matmul(transpose(sum(z.ds[i].ai[:,w[0],:],1)),wn)
+    rt = matmul(transpose(sum(z.ds[i].ai[:,w1,:],1)),wn)
+    r *= z.ds[i].an[-1]
+    rt *= z.ds[i].an[-1]
+    
+    return r, rt
+
+def plot_hrpoly(zs, ix, iy, ap=plt, op=0, sav='',
+                md=0, sn=1, tsr=-1., pref='NewCX',
+                fc='c', nodata=0, ileg=0, ixd=None):
+    if not op:
+        clf()
+    xlab = ix[0]
+    ylab = iy[0]
+    xk = ix[1]
+    yk = iy[1]
+    xr = ix[2]
+    yr = iy[2]
+    
+    labs = []
+    cols = ['r','g','b','m']
+    ic = ['h','he']
+    syms=['o', 'd', 's', '^']
+    for i in range(len(zs)):
+        a = fac.ATOMICSYMBOL[zs[i].ds[0].z]
+        tgt = zs[i].ds[0].tgt
+        if md == 0:
+            fn1 = '%s%s%s_%slike.txt'%(a,tgt,pref,ic[xk-1])
+            fn2 = '%s%s%s_%slike.txt'%(a,tgt,pref,ic[yk-1])
+        else:
+            fn1 = '%srec_%slike.txt'%(tgt.lower(),ic[xk-1])
+            fn2 = '%srec_%slike.txt'%(tgt.lower(),ic[yk-1])
+            
+        r1 = loadtxt(fn1, unpack=1)
+        r2 = loadtxt(fn2, unpack=1)
+        ax = sum(r1[5][xr])
+        ax2 = sum(r1[6][xr]**2)
+        ay = sum(r2[5][yr])
+        ay2 = sum(r2[6][yr]**2)
+        tx = sum(r1[5])
+        tx2 = sum(r1[6]**2)
+        ty = sum(r2[5])
+        ty2 = sum(r2[6]**2)
+        bx = tx-ax
+        bx2 = tx2-ax2
+        by = ty-ay
+        by2 = ty2-ay2
+        rx = ax/tx
+        ry = ay/ty
+        dx = rx**2*(sqrt(bx2/bx**2+ax2/ax**2)*bx/ax)
+        dy = ry**2*(sqrt(by2/by**2+ay2/ay**2)*by/ay)
+        if nodata > 0:
+            continue
+        ap.errorbar([rx], [ry], xerr=[dx], yerr=[dy],
+                    marker=syms[i], markersize=7, linewidth=1.0,
+                    capsize=3, fmt=' ', color=cols[i], fillstyle='none')
+        labs.append('%s+%s'%(a,tgt))
+
+    if ileg == 1:
+        ap.legend(labs)
+    if ap == plt:
+        ap.xlabel(xlab)
+        ap.ylabel(ylab)
+
+    astr = ['s', 'p', 'd', 'f', 'g', 'h']
+    asym = ['o','d','<','^','v','s']
+    labs = []
+    if ixd is None:
+        ixd = range(len(astr))
+    for i in range(len(zs)):
+        nd = len(zs[i].ds)
+        if xk == 1 or nd == 2:
+            rx,rxt = sum_hr(zs[i], xk-1,
+                            int32(r1[1][xr]), int32(r1[2][xr]), sn)
+        else:
+            rx1,rxt1 = sum_hr(zs[i], 1,
+                              int32(r1[1][xr]), int32(r1[2][xr]), sn)
+            rx3,rxt3 = sum_hr(zs[i], 2,
+                              int32(r1[1][xr]), int32(r1[2][xr]), sn)
+            if tsr < 0:
+                rx = rx1 + rx3
+                rxt = rxt1 + rxt3
+            else:
+                rx = rx1/zs[i].ds[1].an[-1] + tsr/3*rx3/zs[i].ds[2].an[-1]
+                rxt = rxt1/zs[i].ds[1].an[-1] + tsr/3*rxt3/zs[i].ds[2].an[-1]
+        if yk == 1 or nd == 2:
+            ry,ryt = sum_hr(zs[i], yk-1,
+                            int32(r2[1][yr]), int32(r2[2][yr]), sn)
+        else:
+            ry1,ryt1 = sum_hr(zs[i], 1,
+                              int32(r2[1][yr]), int32(r2[2][yr]), sn)
+            ry3,ryt3 = sum_hr(zs[i], 2,
+                              int32(r2[1][yr]), int32(r2[2][yr]), sn)
+            if tsr < 0:
+                ry = ry1 + ry3
+                ryt = ryt1 + ryt3
+            else:
+                ry = ry1/zs[i].ds[1].an[-1] + tsr/3*ry3/zs[i].ds[2].an[-1]
+                ryt = ryt1/zs[i].ds[1].an[-1] + tsr/3*ryt3/zs[i].ds[2].an[-1]
+            
+        rx /= rxt
+        ry /= ryt
+        for i0 in range(len(rx)):
+            for i1 in range(len(rx)):
+                if i1 == i0:
+                    continue
+                for i2 in range(len(rx)):
+                    if i2 != i0 and i2 != i1:
+                        ap.fill([rx[i0],rx[i1],rx[i2],rx[i0]],
+                                [ry[i0],ry[i1],ry[i2],ry[i0]], color='0.7')
+            ap.plot(rx[i0], ry[i0], color='k', marker=asym[i0],
+                    fillstyle='none', markersize=7, linestyle='none')
+            if i == 0:
+                labs.append(astr[i0])
+        if i == 0:
+            ap.plot(rx[ixd], ry[ixd], color='k', linewidth=0.75)
+    if ileg == 2:
+        ap.legend(labs,labelspacing=0.3)
+            
+    if sav != '':
+        savefig(sav)
+
+def plot_hrpoly2(zn, zs):
+    plt.rcParams.update({'font.size':15})
+    f,a = plt.subplots(2,1)
+    a[0].set_xlim(-0.05,0.9)
+    a[1].set_xlim(-0.05,0.9)
+    a[0].set_ylim(-0.05,0.375)
+    a[1].set_ylim(-0.05,0.375)
+    a[0].text(0.8, 0.05, '(a)')
+    a[1].text(0.8, 0.05, '(b)')
+    a[0].tick_params(direction='in')
+    a[0].set_xticks(arange(0.0,0.91,0.1))
+    a[0].set_xticklabels([])
+    a[1].set_xticks(arange(0.0,0.91,0.1))
+    f.set_size_inches(5.5,8)
+    f.subplots_adjust(hspace=0,wspace=0,bottom=0.1,left=0.175,right=0.95,top=0.95)
+    plot_hrpoly(zn, 
+                ('r1', 1, range(9,16)),
+                ('r2', 2, range(11,18)),
+                ap=a[0], op=1, ileg=2,
+                ixd=[0,1,2,3,4,5,0])
+    plot_hrpoly(zs, 
+                ('r1', 1, range(9,16)),
+                ('r2', 2, range(11,18)),
+                ap=a[1], op=1, ileg=1,
+                ixd=[0,1,3,4,0])
+
+    a[0].set_ylabel(r'He-like n>9')
+    a[1].set_ylabel(r'He-like n>9')
+    a[1].set_xlabel(r'H-like n>9')
+    savefig('figures/old_new_poly_highn.eps')
+    
+def plot_hrpoly1(zn, zs):
+    plt.rcParams.update({'font.size':15})
+    f,a = plt.subplots(2,1)
+    a[0].set_xlim(0,0.7)
+    a[1].set_xlim(0,0.7)
+    a[0].set_ylim(0.0,0.35)
+    a[1].set_ylim(0.05,0.325)
+    a[0].text(0.6, 0.05, '(a)')
+    a[1].text(0.6, 0.095, '(b)')
+    a[0].tick_params(direction='in')
+    a[0].set_xticks(arange(0.0,0.71,0.1))
+    a[0].set_xticklabels([])
+    a[1].set_xticks(arange(0.0,0.71,0.1))
+    f.set_size_inches(5.5,8)
+    f.subplots_adjust(hspace=0,wspace=0,bottom=0.1,left=0.175,right=0.95,top=0.95)
+    plot_hrpoly(zn, 
+                (r'Ly$_{\alpha 1}$', 1, [1]),
+                (r'Ly$_{\alpha 2}$', 1, [0]),
+                ap=a[0], op=1, ileg=2,
+                ixd=[0,1,2,3,4,5,0])
+    plot_hrpoly(zs, 
+                (r'Ly$_{\alpha 1}$', 1, [1]),
+                (r'Ly$_{\alpha 2}$', 1, [0]),
+                ap=a[1], op=1, ileg=1,
+                ixd=[0,1,5,4,3,2,0])
+
+    a[0].set_ylabel(r'Ly$_{\alpha 2}$')
+    a[1].set_ylabel(r'Ly$_{\alpha 2}$')
+    a[1].set_xlabel(r'Ly$_{\alpha 1}$')
+    savefig('figures/old_new_poly_lya12.eps')
+    
+def plot_tshrpoly(zs, ix, iy, tsr=3.0):
+    plot_hrpoly(zs, ix, iy, tsr=1e10, noleg=1)
+    plot_hrpoly(zs, ix, iy, tsr=0.0, noleg=1, nodata=1, op=1, fc='r')
+    plot_hrpoly(zs, ix, iy, tsr=-1., noleg=1, nodata=1, op=1, fc='y')
+
+def plot_ovsp(zs, xr=[(1.98,2.32),(6.54,7.04),(7.8,9.3)], sav='', wm=0, ierr=0):
+    plt.rcParams.update({'font.size':15})
+    n = len(zs)
+    m = len(xr)
+    f,a = plt.subplots(n,m)
+    f.set_size_inches(12,3.5)
+    f.subplots_adjust(hspace=0,wspace=0)
+    if n == 1:
+        f.subplots_adjust(bottom=0.18,left=0.1,right=0.95)
+    for i in range(n):        
+        x = zs[i].sp.xm/1e3
+        y = zs[i].sp.yc
+        for j in range(m):
+            if (n == 1):
+                aij = a[j]
+            else:
+                aij = a[i,j]
+            w = where((x>=xr[j][0])&(x<=xr[j][1]))
+            sy = 1/max(y[w])
+            aij.plot(x[w], y[w]*sy, color='b', marker='o', markersize=3, fillstyle='none', linestyle=' ', markeredgewidth=0.3)
+            if wm > 0:
+                aij.plot(x[w], zs[i].ym[w]*sy, color='r', linestyle='-', linewidth=0.8)
+            aij.set_xlim(xr[j][0],xr[j][1])
+            aij.set_ylim(-0.1,1.1)
+            if j == 0:
+                aij.set_xticks([2.0,2.1,2.2,2.3])
+            elif j == 1:
+                aij.set_xticks([6.6,6.7,6.8,6.9,7.0])
+            elif j == 2:
+                aij.set_xticks([8.0,8.5,9.0])
+            aij.set_yticks([0.0,0.5,1.0])
+            if i < n-1:
+                aij.set_xticklabels([])
+            if j > 0:
+                aij.set_yticklabels([])
+            if j == 1:
+                aij.text(6.78, 0.7, 'Fe+'+zs[i].ds[0].tgt)
+            if j == 0:
+                aij.text(2.15, 0.95, 'max cnt: %d'%int(1/sy))
+            elif j == 1:
+                aij.text(6.8, 0.95, 'max cnt: %d'%int(1/sy))
+            else:
+                aij.text(8.25, 0.95, 'max cnt: %d'%int(1/sy))
+            if ierr > 0:
+                xm = x[w][::ierr]
+                ym = zs[i].ym[w][::ierr]*sy
+                ye = sqrt(y[w])[::ierr]*sy
+                
+                aij.errorbar(xm, ym,
+                             yerr=(ye,ye), capsize=2, linewidth=0.85,
+                             linestyle='none', color='r')
+                             
+    f.text(0.04,0.5,'Intensity (arb. units)',va='center',rotation='vertical')
+    f.text(0.5,0.03,'Energy (keV)', ha='center')
+    if n > 1:
+        a00 = a[0,0]
+        a01 = a[0,1]
+        a02 = a[0,2]
+    else:
+        a00 = a[0]
+        a01 = a[1]
+        a02 = a[2]
+        
+    a00.text(2.03,0.975,'He-like')
+    a00.text(2.23,0.7,'H-like')
+    a01.text(6.65,0.8, r'He$_{\alpha}$')
+    a01.text(6.93,0.4,r'Ly$_{\alpha}$')
+    a02.text(7.83,0.575,r'He$_{\beta}$')
+    a02.text(8.14,0.4, r'Ly$_{\beta}$')
+    a02.text(8.29,0.35, r'He$_{\gamma}$')
+    a02.text(8.45,0.23, r'He$_{\delta}$')
+    a02.text(8.66,0.325, r'Ly$_{\gamma}$')
+    a02.text(8.86,0.2, r'Ly$_{\delta}$')
+    a02.text(8.975,0.95,r'n=14')
+    if n > 1:
+        a[1,2].text(8.95,0.975,r'n=14')
+        a[2,2].text(8.95,0.975,r'n=14')
+        a[3,2].text(8.95,0.975,r'n=12')
+    if sav != '':
+        f.savefig(sav)
+
+def plot_h2sp(zs):
+    plot_ovsp(zs[:1], wm=1, sav='figures/spec_h2.eps', ierr=0)
+    
+def plot_wdce(zs, sav='', op=0):
+    clf()
+    r = mcpk.plot_widths()
+    clf()
+    ice = len(z.rs[0].sig)-1
+    t = transpose([(z.mpa[ice],z.mpe[ice]) for z in zs])
+    tb = 10**t[0]
+    t0 = 10**(t[0])-10**(t[0]-t[1])
+    t1 = 10**(t[0]+t[1])-10**(t[0])
+    errorbar(r[0], tb, xerr=r[1], yerr=(t0,t1), marker='o', capsize=3, fmt=' ')
+    xlabel('Decrease in FWHM (eV)')
+    ylabel('Collision Energy (eV/amu)')
+    
+    if sav != '':
+        savefig(sav)
+        
+def plot_tsr(zs, sav='', op=0):
+    if not op:
+        clf()
+    isd = zs[0].iid[1]
+    itd = zs[0].iid[2]
+    r = transpose([(z.mpa[isd],z.mpe[isd],z.mpa[itd],z.mpe[itd]) for z in zs])
+    y = r[2]/r[0]
+    ye = sqrt((r[1]/r[0])**2+(r[3]/r[2])**2)*y
+    errorbar(range(4), 3*y, yerr=3*ye, marker='o', capsize=3, fmt=' ')
+    ax = gca()
+    t = ax.set_xticks([0,1,2,3])
+    t = ax.set_xticklabels(['H2','H','N2','He'])
+    xlabel('Neutral Targets')
+    ylabel('He-like Triplet/Singlet Capture Ratio')
+    if sav != '':
+        savefig(sav)
+        
+        
+    
